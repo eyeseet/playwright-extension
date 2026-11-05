@@ -5,7 +5,7 @@ function advertiseTools(result){const tools=[...(result.tools??[])].map(tool=>to
 function createSessionLifecycle({manageGroups,release,audit,now=Date.now,idleMs=IDLE_MS,persist=()=>{},restored=[]}){
  const records=new Map();let sweeping=false;
  const recoverable=new Map(restored.map(r=>[r.key,r]));
- function save(){persist([...records.values()].map(r=>({key:r.key,seeds:r.seeds,knownGroups:r.knownGroups,lastActivity:r.lastActivity})));}
+ function save(){persist([...recoverable.values(),...[...records.values()].map(r=>({key:r.key,seeds:r.seeds,knownGroups:r.knownGroups,lastActivity:r.lastActivity}))]);}
  function bind(key,bound){let r=records.get(key);if(!r||r.bound!==bound){r={key,bound,seeds:[],knownGroups:[],lastActivity:now(),active:0,uncertain:false,closing:false};const old=recoverable.get(key);if(old){r.seeds=old.seeds??[];r.knownGroups=old.knownGroups??[];recoverable.delete(key);}records.set(key,r);save();}return r;}
  function notePage({clientName,tabId}){const match=/^ChatGPT ([a-f0-9]{8})(?: \(\d+\))?$/.exec(clientName);if(!match)return;const candidates=[...records.values()].filter(r=>r.key.startsWith(match[1])&&!r.closing);if(candidates.length!==1)return;const r=candidates[0];r.seeds.push({tabId,clientName});r.lastActivity=now();save();}
  function begin(key){const r=records.get(key);if(!r)throw Error('Session not registered');if(r.closing)throw Error('Session cleanup in progress; retry the browser action');r.active++;r.lastActivity=now();return r;}
@@ -35,3 +35,4 @@ function createSessionLifecycle({manageGroups,release,audit,now=Date.now,idleMs=
  return {bind,notePage,begin,end,finish,finishLastTab,sweep,records};
 }
 module.exports={IDLE_MS,INSTRUCTIONS,FINISH_TOOL,advertiseTools,createSessionLifecycle};
+

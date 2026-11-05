@@ -1,5 +1,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm');
 const {manageOwnedGroups}=require('./group-cleanup.cjs');const {orphanWelcomes}=require('./orphan-welcomes.cjs');
+test('binding one restored chat preserves ownership of other restored chats',()=>{const {createSessionLifecycle}=require('./session-lifecycle.cjs');let saved;const l=createSessionLifecycle({manageGroups:async()=>({}),release:async()=>{},audit:()=>{},persist:r=>saved=r,restored:[{key:'one',seeds:[],knownGroups:[]},{key:'two',seeds:[],knownGroups:[]}]});l.bind('one',{});assert.deepEqual(saved.map(r=>r.key).sort(),['one','two']);});
 class ExtensionURL extends URL {get origin(){return this.protocol==='chrome-extension:'?this.protocol+'//'+this.hostname:super.origin;}}
 const origin='chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm';
 const url=origin+'/connect.html?client='+encodeURIComponent(JSON.stringify({name:'ChatGPT abcdef12'}));

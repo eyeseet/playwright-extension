@@ -2,7 +2,7 @@ name: Extension fork regression tests
 on:
   push:
     branches: [extension-repairs]
-    paths: ['packages/extension/**', '.github/workflows/extension-fork-tests.yml']
+    paths: ['packages/extension/**', 'maintenance/**', '.github/workflows/extension-fork-tests.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,3 +16,4 @@ jobs:
         with:
           node-version: '24'
       - run: node --test packages/extension/fork-tests/repairs.test.cjs
+      - run: node --test maintenance/windows-server/cleanup.test.cjs
