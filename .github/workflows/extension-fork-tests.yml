@@ -1,0 +1,18 @@
+name: Extension fork regression tests
+on:
+  push:
+    branches: [extension-repairs]
+    paths: ['packages/extension/**', '.github/workflows/extension-fork-tests.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    if: github.repository_owner == 'eyeseet'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test packages/extension/fork-tests/repairs.test.cjs
