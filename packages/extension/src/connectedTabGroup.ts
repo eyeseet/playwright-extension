@@ -222,7 +222,8 @@ export class ConnectedTabGroup {
     try {
       await retryOnDrag(async () => {
         if (this._groupId === null) {
-          this._groupId = await chrome.tabs.group({ tabIds: [tabId] });
+          const tab = await chrome.tabs.get(tabId);
+          this._groupId = await chrome.tabs.group({ createProperties: { windowId: tab.windowId }, tabIds: [tabId] });
           await chrome.tabGroups.update(this._groupId, groupStyle);
           this._connection.audit('group-created', { groupId: this._groupId, tabId });
         } else {

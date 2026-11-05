@@ -8,7 +8,7 @@ const {stripTypeScriptTypes}=require('node:module');
 function fixture(exists=true) {
   const timers=[],groups=[],events=[];
   const event={addListener(){},removeListener(){}};
-  const chrome={tabs:{get:async id=>{if(!exists)throw Error('removed');return{id};},group:async args=>{groups.push(args);await Promise.resolve();return args.groupId??100;},onUpdated:event,onRemoved:event},tabGroups:{update:async()=>{}}};
+  const chrome={tabs:{get:async id=>{if(!exists)throw Error('removed');return{id,windowId:42};},group:async args=>{groups.push(args);await Promise.resolve();return args.groupId??100;},onUpdated:event,onRemoved:event},tabGroups:{update:async()=>{}}};
   const context=vm.createContext({chrome,console:{log(){}},WebSocket:{OPEN:1},setTimeout:fn=>{timers.push(fn);}});
   const sources=['relayConnection.ts','connectedTabGroup.ts'].map(name=>stripTypeScriptTypes(fs.readFileSync(path.join(__dirname,'../src',name),'utf8'),{mode:'transform'}).replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,''));
   vm.runInContext(sources.join('\n')+'\nglobalThis.classes={RelayConnection,ConnectedTabGroup};',context);
@@ -21,7 +21,7 @@ test('simultaneous tab attachments create one group and ignore duplicate groupin
   const f=fixture();const group=Object.create(f.classes.ConnectedTabGroup.prototype);
   Object.assign(group,{_groupId:null,_groupQueue:Promise.resolve(),_groupTabIds:new Set(),groupStyle:{title:'Test'},_connection:f.relay});
   await Promise.all([group._addTabToGroup(1),group._addTabToGroup(2),group._addTabToGroup(2)]);
-  assert.equal(f.groups.length,2);assert.equal(f.groups.filter(g=>g.groupId===undefined).length,1);assert.equal(f.groups[1].groupId,100);
+  assert.equal(f.groups.length,2);assert.equal(f.groups.filter(g=>g.groupId===undefined).length,1);assert.equal(f.groups[0].createProperties.windowId,42);assert.equal(f.groups[1].groupId,100);
 });
 
 test('removed tabs are not grouped',async()=>{
