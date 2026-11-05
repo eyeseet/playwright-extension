@@ -112,6 +112,7 @@ class PlaywrightExtension {
       if (!connection)
         throw new Error('Pending client connection closed');
 
+      connection.background = background;
       const id = ++this._lastConnectionId;
       const taken = [...this._connections.values()].flatMap(group => group.groupStyle ? [group.groupStyle] : []);
       const group = new ConnectedTabGroup(connection, tab, clientName, tabGroup ? uniqueGroupStyle(clientName, taken) : undefined, tabId => this._pendingConnections.has(tabId));

@@ -75,6 +75,7 @@ export class ConnectedTabGroup {
   private _connection: RelayConnection;
   private _isTabReserved: (tabId: number) => boolean;
   private _groupId: number | null = null;
+  private _groupQueue: Promise<void> = Promise.resolve();
   private _groupTabIds: Set<number> = new Set();
   private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
@@ -201,7 +202,20 @@ export class ConnectedTabGroup {
   // first use. `_groupTabIds` is updated after the await so an onUpdated event
   // that arrives concurrently (`_groupId` still null, wasInGroup still false)
   // becomes a harmless no-op rather than taking the drag-out branch.
-  private async _addTabToGroup(tabId: number): Promise<void> {
+  private _addTabToGroup(tabId: number): Promise<void> {
+    const task = this._groupQueue.then(() => this._addTabToGroupOnce(tabId));
+    this._groupQueue = task.catch(() => {});
+    return task;
+  }
+
+  private async _addTabToGroupOnce(tabId: number): Promise<void> {
+    if (this._connection.isClosed)
+      return;
+    try {
+      await chrome.tabs.get(tabId);
+    } catch {
+      return;
+    }
     const groupStyle = this.groupStyle;
     if (!groupStyle || this._groupTabIds.has(tabId))
       return;
@@ -210,6 +224,7 @@ export class ConnectedTabGroup {
         if (this._groupId === null) {
           this._groupId = await chrome.tabs.group({ tabIds: [tabId] });
           await chrome.tabGroups.update(this._groupId, groupStyle);
+          this._connection.audit('group-created', { groupId: this._groupId, tabId });
         } else {
           await chrome.tabs.group({ groupId: this._groupId, tabIds: [tabId] });
         }

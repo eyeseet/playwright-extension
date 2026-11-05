@@ -56,7 +56,7 @@ const CHROME_EVENT_METHODS = [
 
 const REATTACH_DELAY_MS = 150;
 const REATTACH_VERIFY_MS = 2500;
-const REATTACH_COOLDOWN_MS = 3000;
+const MAX_REATTACH_ATTEMPTS = 3;
 
 export class RelayConnection {
   private _ws: WebSocket;
@@ -67,11 +67,22 @@ export class RelayConnection {
   private _eventListeners: Array<{ remove: () => void }> = [];
   private _closed = false;
   private _pendingReattach = new Set<number>();
-  private _recentReattach = new Set<number>();
+  private _recoveryAttempts = new Map<number, number>();
+  background = false;
 
   onclose?: () => void;
   ontabattached?: (tabId: number) => void;
   ontabdetached?: (tabId: number) => void;
+
+  get isClosed(): boolean {
+    return this._closed;
+  }
+
+  // Optional diagnostic event understood by the local relay. No URLs,
+  // page contents, credentials or arbitrary error messages are included.
+  audit(event: string, metadata: { tabId?: number; groupId?: number; attempt?: number } = {}): void {
+    this._sendMessage({ method: 'extension.audit', params: [{ event, ...metadata }] });
+  }
 
   get attachedTabs(): ReadonlySet<number> {
     return this._attachedTabs;
@@ -130,6 +141,8 @@ export class RelayConnection {
     this._attachedTabs.add(tabId);
     this._hasEverAttached = true;
     this._pendingReattach.delete(tabId);
+    this._recoveryAttempts.delete(tabId);
+    this.audit('tab-attached', { tabId });
     this.ontabattached?.(tabId);
   }
 
@@ -154,7 +167,7 @@ export class RelayConnection {
       return;
     this._closed = true;
     this._pendingReattach.clear();
-    this._recentReattach.clear();
+    this._recoveryAttempts.clear();
     for (const l of this._eventListeners)
       l.remove();
     this._eventListeners = [];
@@ -190,13 +203,10 @@ export class RelayConnection {
   private _maybeScheduleReattach(tabId: number): boolean {
     if (this._closed)
       return false;
-    if (this._recentReattach.has(tabId)) {
-      debugLog(`Not re-attaching tab ${tabId}: re-detached within ${REATTACH_COOLDOWN_MS}ms`);
-      return false;
-    }
-    this._recentReattach.add(tabId);
-    setTimeout(() => this._recentReattach.delete(tabId), REATTACH_COOLDOWN_MS);
+    if (this._pendingReattach.has(tabId))
+      return true;
     this._pendingReattach.add(tabId);
+    this._recoveryAttempts.set(tabId, 0);
     setTimeout(() => void this._tryReattach(tabId), REATTACH_DELAY_MS);
     return true;
   }
@@ -208,11 +218,13 @@ export class RelayConnection {
   private async _tryReattach(tabId: number): Promise<void> {
     if (this._reattachAborted(tabId))
       return;
-    let tab: chrome.tabs.Tab | undefined;
+    let tab: chrome.tabs.Tab;
     try {
       tab = await chrome.tabs.get(tabId);
     } catch {
       this._pendingReattach.delete(tabId);
+      this._recoveryAttempts.delete(tabId);
+      this.audit('tab-confirmed-removed', { tabId });
       this._checkLastTabDetached();
       return;
     }
@@ -222,13 +234,22 @@ export class RelayConnection {
       this._pendingReattach.delete(tabId);
       return;
     }
+    const attempt = (this._recoveryAttempts.get(tabId) ?? 0) + 1;
+    this._recoveryAttempts.set(tabId, attempt);
+    this.audit('reattach-attempt', { tabId, attempt });
     this.attachTab(tab);
     setTimeout(() => {
-      if (this._reattachAborted(tabId))
+      if (this._reattachAborted(tabId) || this._attachedTabs.has(tabId))
         return;
+      if (attempt < MAX_REATTACH_ATTEMPTS) {
+        setTimeout(() => void this._tryReattach(tabId), attempt * 500);
+        return;
+      }
       this._pendingReattach.delete(tabId);
-      if (!this._attachedTabs.has(tabId))
-        this._checkLastTabDetached();
+      this._recoveryAttempts.delete(tabId);
+      // Do not start a reconnect/group-creation loop for a tab that still
+      // exists. Keep the transport alive and report the exhausted recovery.
+      this.audit('reattach-exhausted-tab-kept', { tabId, attempt });
     }, REATTACH_VERIFY_MS);
   }
 
@@ -280,6 +301,8 @@ export class RelayConnection {
     if (!ALLOWED_CHROME_COMMANDS.has(message.method))
       throw new Error(`Unknown method: ${message.method}`);
     const args = (message.params ?? []) as any[];
+    if (this.background && message.method === 'chrome.tabs.create')
+      args[0] = { ...args[0], active: false };
     const result = await invokeChromeMethod(message.method, args);
     // Attach bookkeeping; detach flows through the chrome.debugger.onDetach event.
     if (message.method === 'chrome.debugger.attach') {
