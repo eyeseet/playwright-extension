@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { execSync, spawn } from 'child_process';
+import { execFileSync, execSync, spawn } from 'child_process';
 
 import crypto from 'crypto';
 import os from 'os';
@@ -73,11 +73,8 @@ const booleanOptions: (keyof (GlobalOptions & OpenOptions & AttachOptions & { al
   'version',
 ];
 
-export async function program(options?: { embedderVersion?: string}) {
-  const clientInfo = createClientInfo();
+export function parseArgs(argv: string[]): MinimistArgs {
   const help = require(libPath('tools', 'cli-client', 'help.json'));
-
-  const argv = process.argv.slice(2);
   const boolean = [...help.booleanOptions, ...booleanOptions];
   const args: MinimistArgs = minimist(argv, { boolean, string: ['_'] });
   // Normalize -s alias to --session
@@ -90,6 +87,13 @@ export async function program(options?: { embedderVersion?: string}) {
     args.global = true;
     delete args.g;
   }
+  return args;
+}
+
+export async function program(options?: { args?: MinimistArgs, embedderVersion?: string }) {
+  const clientInfo = createClientInfo();
+  const help = require(libPath('tools', 'cli-client', 'help.json'));
+  const args = options?.args ?? parseArgs(process.argv.slice(2));
 
   const output: Output = args.json ? new JsonOutput() : new TextOutput();
   const commandName = args._?.[0];
@@ -363,17 +367,19 @@ async function killAllDaemons(): Promise<number[]> {
 
   try {
     if (platform === 'win32') {
-      const clauses = [`(${daemonProcessPatterns.map(p => `$_.CommandLine -like '*${p}*'`).join(' -or ')})`];
+      const clauses = [
+        '$_.ProcessId -ne $PID',
+        `(${daemonProcessPatterns.map(p => `$_.CommandLine -like '*${p}*'`).join(' -or ')})`,
+      ];
       if (pidFilter)
         clauses.push(`(${[...pidFilter].map(p => `$_.ProcessId -eq ${p}`).join(' -or ')})`);
       const whereClause = clauses.join(' -and ');
-      const result = execSync(
-          `powershell -NoProfile -NonInteractive -Command `
-          + `"Get-CimInstance Win32_Process `
+      const result = execFileSync('powershell', [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `Get-CimInstance Win32_Process `
           + `| Where-Object { ${whereClause} } `
-          + `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }"`,
-          { encoding: 'utf-8' }
-      );
+          + `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }`,
+      ], { encoding: 'utf-8' });
       const pids = result.split('\n')
           .map(line => line.trim())
           .filter(line => /^\d+$/.test(line));

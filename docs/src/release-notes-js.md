@@ -92,6 +92,8 @@ export default defineConfig({
 
 - String and `URLSearchParams` values of the `params` option in [APIRequestContext] requests are now appended to the query that the URL already has, instead of replacing it.
 
+- [APIRequestContext] now matches `application/json` content types case-insensitively and with parameters, such as `application/json;charset=UTF-8`, when serializing string `data`. Previously, only the exact value `application/json` triggered JSON encoding. With these content types, a string that does not parse as JSON is now JSON-encoded, including quotes and escaping, instead of being sent as is. This changes malformed JSON bodies and can invalidate signatures computed over the original string. Pass `data: Buffer.from(body, 'utf8')` to send exact bytes without JSON encoding. Strings that already parse as JSON and `Buffer` data are unchanged.
+
 - `.css`, `.less` and `.scss` imports in test files now load as empty modules instead of being removed, so the imported file must exist.
 
 - The blob reporter again deletes the content of its output directory before it writes the report. Playwright 1.64 kept reports with other names.
@@ -134,9 +136,9 @@ const result = await page.webmcp.callTool('add', { a: 2, b: 40 });
 console.log(result.content[0].text); // "42"
 ```
 
-[Playwright MCP](./getting-started-mcp.md) also supports WebMCP by default, with page-defined tools offered to the agent as `webmcp_<tool>`. Pass `--no-webmcp` to opt out.
+[Playwright MCP](https://playwright.dev/mcp/introduction) also supports WebMCP by default, with page-defined tools offered to the agent as `webmcp_<tool>`. Pass `--no-webmcp` to opt out.
 
-[`playwright-cli`](./getting-started-cli.md) exposes them as well:
+[`playwright-cli`](https://playwright.dev/agent-cli/introduction) exposes them as well:
 
 ```bash
 playwright-cli webmcp-list
@@ -177,7 +179,7 @@ export default defineConfig({
 - The cursor stays visible at the last action point, survives navigations and travels along a natural, eased path.
 - Videos are encoded with VP9 instead of VP8, which takes less CPU and produces smaller files of the same or better
   quality.
-- All video options are also available in [Playwright MCP](./getting-started-mcp.md) and [`playwright-cli`](./getting-started-cli.md).
+- All video options are also available in [Playwright MCP](https://playwright.dev/mcp/introduction) and [`playwright-cli`](https://playwright.dev/agent-cli/introduction).
 
 ### 🎯 Test runner
 
@@ -521,7 +523,7 @@ export default defineConfig({
 
 #### Command line & MCP
 
-- Playwright now bundles the [Playwright MCP](./getting-started-mcp.md) server and [`playwright-cli`](./getting-started-cli.md), runnable via `npx playwright mcp` and `npx playwright cli`.
+- Playwright now bundles the [Playwright MCP](https://playwright.dev/mcp/introduction) server and [`playwright-cli`](https://playwright.dev/agent-cli/introduction), runnable via `npx playwright mcp` and `npx playwright cli`.
 
 #### Reporters
 

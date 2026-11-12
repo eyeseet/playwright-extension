@@ -112,6 +112,8 @@ function inPagePrepareForScreenshots(screenshotStyle: string, hideCaret: boolean
       for (const animation of root.getAnimations()) {
         if (!animation.effect || animation.playbackRate === 0 || infiniteAnimationsToResume.has(animation))
           continue;
+        if (typeof ScrollTimeline !== 'undefined' && animation.timeline instanceof ScrollTimeline)
+          continue;
         const endTime = animation.effect.getComputedTiming().endTime;
         if (Number.isFinite(endTime)) {
           try {
@@ -180,18 +182,19 @@ export class Screenshotter {
 
   private async _fullPageSize(progress: Progress): Promise<types.Size> {
     const fullPageSize = await this._page.mainFrame().waitForFunctionValueInUtility(progress, () => {
-      if (!document.body || !document.documentElement)
+      const { body, documentElement } = document;
+      if (!documentElement)
         return null;
       return {
         width: Math.max(
-            document.body.scrollWidth, document.documentElement.scrollWidth,
-            document.body.offsetWidth, document.documentElement.offsetWidth,
-            document.body.clientWidth, document.documentElement.clientWidth
+            body?.scrollWidth ?? 0, documentElement.scrollWidth,
+            body?.offsetWidth ?? 0, documentElement.offsetWidth ?? 0,
+            body?.clientWidth ?? 0, documentElement.clientWidth
         ),
         height: Math.max(
-            document.body.scrollHeight, document.documentElement.scrollHeight,
-            document.body.offsetHeight, document.documentElement.offsetHeight,
-            document.body.clientHeight, document.documentElement.clientHeight
+            body?.scrollHeight ?? 0, documentElement.scrollHeight,
+            body?.offsetHeight ?? 0, documentElement.offsetHeight ?? 0,
+            body?.clientHeight ?? 0, documentElement.clientHeight
         ),
       };
     });

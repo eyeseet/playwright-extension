@@ -4502,6 +4502,13 @@ might return multiple quads for inline nodes.
     export type setDeviceMetricsOverrideReturnValue = {
     }
     /**
+     * Clears device metrics overrides without resizing the browser window.
+     */
+    export type clearDeviceMetricsOverrideParameters = {
+    }
+    export type clearDeviceMetricsOverrideReturnValue = {
+    }
+    /**
      * Allows to disable script execution for the page.
      */
     export type setJavaScriptEnabledParameters = {
@@ -7510,6 +7517,17 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
       pageProxyId: PageProxyID;
     }
     /**
+     * Maximizes the native browser window.
+     */
+    export type maximizeWindowParameters = {
+      /**
+       * Unique identifier of the page proxy.
+       */
+      pageProxyId: PageProxyID;
+    }
+    export type maximizeWindowReturnValue = {
+    }
+    /**
      * Navigates current page to the given URL.
      */
     export type navigateParameters = {
@@ -8815,7 +8833,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
   }
   
   /**
-   * Query and modify storage (cookies for now) under Site Isolation. Backed by the NetworkProcess-owned cookie store via API::HTTPCookieStore, so cross-origin iframe cookies are visible. The flat read also surfaces partitioned (CHIPS) cookies, each labeled with its partitionKey.
+   * Query and modify storage (cookies for now) under Site Isolation. Reads and deletes are scoped to the cookies the inspected page's frames can access, as Page.getCookies does without Site Isolation: for each frame, including cross-origin iframes in other processes, the cookies its document would send to its own URL and to its loaded same-site subresources' URLs, each labeled with its partitionKey. setCookie is not scoped.
    */
   export namespace Storage {
     /**
@@ -8895,6 +8913,10 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
        * If the cookie is secure.
        */
       secure?: boolean;
+      /**
+       * The partition of the cookie. An empty string matches only unpartitioned cookies.
+       */
+      partitionKey?: string;
     }
     /**
      * Identifies the storage partition a cookie belongs to. At least one of 'userContext' or 'sourceOrigin' is present.
@@ -9020,6 +9042,10 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
        */
       isPaused?: boolean;
     }
+    /**
+     * State of a debugger pause session. While it is paused, the UI process holds every page of the browsing context group: each frame is either stopped or held. Closed means the hold was released, not that no frame is stopped: a frame can stay in the debugger, so Debugger.paused and Debugger.resumed remain the source of truth for which frames are stopped.
+     */
+    export type DebuggerPauseSessionState = "paused"|"closed";
     
     export type targetCreatedPayload = {
       targetInfo: TargetInfo;
@@ -9040,6 +9066,20 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
        * ID of the committed target.
        */
       newTargetId: string;
+    }
+    /**
+     * Fired when a debugger pause session opens, when the set of frames whose pause has not ended changes, and when the hold is released.
+     */
+    export type debuggerPauseSessionChangedPayload = {
+      /**
+       * Identifies the session from the event that opens it to the event that closes it.
+       */
+      sessionId: string;
+      state: DebuggerPauseSessionState;
+      /**
+       * Targets of the frames whose pause has not ended yet. A frame that has resumed stays listed until its process is idle, which can be after Debugger.resumed. Empty when the session is closed, even if a frame is still stopped.
+       */
+      stoppingTargetIds: string[];
     }
     export type dispatchMessageFromTargetPayload = {
       targetId: string;
@@ -9386,6 +9426,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Target.targetCreated": Target.targetCreatedPayload;
     "Target.targetDestroyed": Target.targetDestroyedPayload;
     "Target.didCommitProvisionalTarget": Target.didCommitProvisionalTargetPayload;
+    "Target.debuggerPauseSessionChanged": Target.debuggerPauseSessionChangedPayload;
     "Target.dispatchMessageFromTarget": Target.dispatchMessageFromTargetPayload;
     "Timeline.eventRecorded": Timeline.eventRecordedPayload;
     "Timeline.recordingStarted": Timeline.recordingStartedPayload;
@@ -9519,6 +9560,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     ["Target.targetCreated"]: [Target.targetCreatedPayload];
     ["Target.targetDestroyed"]: [Target.targetDestroyedPayload];
     ["Target.didCommitProvisionalTarget"]: [Target.didCommitProvisionalTargetPayload];
+    ["Target.debuggerPauseSessionChanged"]: [Target.debuggerPauseSessionChangedPayload];
     ["Target.dispatchMessageFromTarget"]: [Target.dispatchMessageFromTargetPayload];
     ["Timeline.eventRecorded"]: [Timeline.eventRecordedPayload];
     ["Timeline.recordingStarted"]: [Timeline.recordingStartedPayload];
@@ -9681,6 +9723,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Dialog.disable": Dialog.disableParameters;
     "Dialog.handleJavaScriptDialog": Dialog.handleJavaScriptDialogParameters;
     "Emulation.setDeviceMetricsOverride": Emulation.setDeviceMetricsOverrideParameters;
+    "Emulation.clearDeviceMetricsOverride": Emulation.clearDeviceMetricsOverrideParameters;
     "Emulation.setJavaScriptEnabled": Emulation.setJavaScriptEnabledParameters;
     "Emulation.setAuthCredentials": Emulation.setAuthCredentialsParameters;
     "Emulation.setActiveAndFocused": Emulation.setActiveAndFocusedParameters;
@@ -9778,6 +9821,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Playwright.createContext": Playwright.createContextParameters;
     "Playwright.deleteContext": Playwright.deleteContextParameters;
     "Playwright.createPage": Playwright.createPageParameters;
+    "Playwright.maximizeWindow": Playwright.maximizeWindowParameters;
     "Playwright.navigate": Playwright.navigateParameters;
     "Playwright.grantFileReadAccess": Playwright.grantFileReadAccessParameters;
     "Playwright.takePageScreenshot": Playwright.takePageScreenshotParameters;
@@ -9992,6 +10036,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Dialog.disable": Dialog.disableReturnValue;
     "Dialog.handleJavaScriptDialog": Dialog.handleJavaScriptDialogReturnValue;
     "Emulation.setDeviceMetricsOverride": Emulation.setDeviceMetricsOverrideReturnValue;
+    "Emulation.clearDeviceMetricsOverride": Emulation.clearDeviceMetricsOverrideReturnValue;
     "Emulation.setJavaScriptEnabled": Emulation.setJavaScriptEnabledReturnValue;
     "Emulation.setAuthCredentials": Emulation.setAuthCredentialsReturnValue;
     "Emulation.setActiveAndFocused": Emulation.setActiveAndFocusedReturnValue;
@@ -10089,6 +10134,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     "Playwright.createContext": Playwright.createContextReturnValue;
     "Playwright.deleteContext": Playwright.deleteContextReturnValue;
     "Playwright.createPage": Playwright.createPageReturnValue;
+    "Playwright.maximizeWindow": Playwright.maximizeWindowReturnValue;
     "Playwright.navigate": Playwright.navigateReturnValue;
     "Playwright.grantFileReadAccess": Playwright.grantFileReadAccessReturnValue;
     "Playwright.takePageScreenshot": Playwright.takePageScreenshotReturnValue;

@@ -21,6 +21,21 @@ Console.WriteLine(normalized.ToString());
 ### New APIs
 
 - New option [`option: CDPSession.send.timeout`] in [`method: CDPSession.send`].
+- New [PlaywrightAssertionException] is thrown when a Playwright assertion is not met. It extends [PlaywrightException], so `catch (PlaywrightException)` blocks catch it as well.
+- New `ActionTimeout` and `NavigationTimeout` run settings set the default timeouts of every context that the NUnit, MSTest, xUnit and xUnit v3 base classes create. Set them in the [`.runsettings` file](./test-runners.md#using-the-runsettings-file) or on the command line:
+
+  ```xml
+  <RunSettings>
+    <Playwright>
+      <ActionTimeout>10000</ActionTimeout>
+      <NavigationTimeout>60000</NavigationTimeout>
+    </Playwright>
+  </RunSettings>
+  ```
+
+  ```bash
+  dotnet test -- Playwright.ActionTimeout=10000 Playwright.NavigationTimeout=60000
+  ```
 
 ### Breaking Changes ⚠️
 
@@ -33,6 +48,10 @@ Console.WriteLine(normalized.ToString());
 - Text that the browser does not render, such as text that is not assigned to a slot or text directly inside a closed `<details>`, is no longer part of accessible names and aria snapshots. This can change the results of [`method: Page.getByRole`] with a name, [`method: Locator.ariaSnapshot`] and [`method: LocatorAssertions.toMatchAriaSnapshot`].
 
 - The `ParamsString` option in [APIRequestContext] requests is now appended to the query that the URL already has, instead of replacing it.
+
+### Announcements
+
+* ⚠️ Playwright for .NET now bundles Node.js 26 instead of Node.js 24. On Linux, Node.js 26 needs the `libatomic1` library.
 
 ### Browser Versions
 
@@ -65,9 +84,9 @@ var result = await page.Webmcp.CallToolAsync("add", new { a = 2, b = 40 });
 Console.WriteLine(result?.GetProperty("content")[0].GetProperty("text")); // "42"
 ```
 
-[Playwright MCP](./getting-started-mcp.md) also supports WebMCP by default, with page-defined tools offered to the agent as `webmcp_<tool>`. Pass `--no-webmcp` to opt out.
+[Playwright MCP](https://playwright.dev/mcp/introduction) also supports WebMCP by default, with page-defined tools offered to the agent as `webmcp_<tool>`. Pass `--no-webmcp` to opt out.
 
-[`playwright-cli`](./getting-started-cli.md) exposes them as well:
+[`playwright-cli`](https://playwright.dev/agent-cli/introduction) exposes them as well:
 
 ```bash
 playwright-cli webmcp-list
@@ -103,7 +122,7 @@ await page.Screencast.ShowActionsAsync(new()
 - The cursor stays visible at the last action point, survives navigations and travels along a natural, eased path.
 - Videos are encoded with VP9 instead of VP8, which takes less CPU and produces smaller files of the same or better
   quality.
-- All video options are also available in [Playwright MCP](./getting-started-mcp.md) and [`playwright-cli`](./getting-started-cli.md).
+- All video options are also available in [Playwright MCP](https://playwright.dev/mcp/introduction) and [`playwright-cli`](https://playwright.dev/agent-cli/introduction).
 
 ### 🪆 Locator.within()
 

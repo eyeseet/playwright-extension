@@ -17,11 +17,11 @@ cd "$(dirname $0)"
 if [[ $1 == "--help" ]]; then
   echo "usage: $(basename $0) [--release|--alpha|--beta]"
   echo
-  echo "Publishes all packages."
+  echo "Publishes all packages under <tag>-pending; the promote-npm job of publish_release.yml moves <tag> to them."
   echo
-  echo "--release                publish @latest version of all packages"
-  echo "--alpha                  publish @next version of all packages"
-  echo "--beta                   publish @beta version of all packages"
+  echo "--release                publish the @latest version of all packages"
+  echo "--alpha                  publish the @next version of all packages"
+  echo "--beta                   publish the @beta version of all packages"
   exit 1
 fi
 
@@ -73,11 +73,21 @@ else
   exit 1
 fi
 
+# A successful `npm publish` only means the registry accepted the package: it goes live after npm
+# processes it, usually within 3 minutes, but playwright-core@1.65.0 took 110 minutes, during which
+# playwright@latest depended on a missing package. So the packages are published under
+# "<tag>-pending" and <tag> stays where it is: the promote-npm job of publish_release.yml moves it once
+# all of them are live, reading the list of published packages from npm-publish.json.
 echo "==================== Publishing version ${VERSION} ================"
 node ./utils/workspace.js --ensure-consistent
-node ./utils/workspace.js --list-public-package-paths | while read package
-do
-  npm publish --access=public ${package} --tag="${NPM_PUBLISH_TAG}"
+PACKAGE_PATHS=$(node ./utils/workspace.js --list-public-package-paths)
+PACKAGE_NAMES=()
+for package in ${PACKAGE_PATHS}; do
+  PACKAGE_NAMES+=("$(node -p "require('${package}/package.json').name")")
+  npm publish --access=public "${package}" --tag="${NPM_PUBLISH_TAG}-pending"
 done
+
+node -e 'const [version, tag, ...packages] = process.argv.slice(1); console.log(JSON.stringify({ version, tag, packages }, null, 2));' \
+  "${VERSION}" "${NPM_PUBLISH_TAG}" "${PACKAGE_NAMES[@]}" > npm-publish.json
 
 echo "Done."

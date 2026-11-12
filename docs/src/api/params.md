@@ -579,8 +579,24 @@ unless explicitly provided. File values can be passed as file-like object contai
 
 An instance of [FormData] can be created via [`method: APIRequestContext.createFormData`].
 
-## js-python-csharp-fetch-option-data
-* langs: js, python, csharp
+## js-fetch-option-data
+* langs: js
+- `data` <[string]|[Buffer]|[Serializable]>
+
+Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be serialized to JSON
+and the `content-type` header will be set to `application/json` if not explicitly set.
+
+If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON.
+Otherwise, it is JSON-encoded as a string, including quotes and escaping. Strings with other content types
+are sent as is.
+
+Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding,
+for example to send deliberately malformed JSON or a body used to compute a signature.
+For strings and buffers, the `content-type` header defaults to `application/octet-stream` if not explicitly set.
+
+## python-csharp-fetch-option-data
+* langs: python, csharp
 - `data` <[string]|[Buffer]|[Serializable]>
 
 Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
@@ -935,6 +951,19 @@ on selectors that imply single target DOM element will throw when more than one 
 This option does not affect any Locator APIs (Locators are always strict). Defaults to `false`.
 See [Locator] to learn more about the strict mode.
 
+## context-option-locate-only-visible
+* langs: js
+* since: v1.66
+- `locateOnlyVisible` <[boolean]>
+
+Whether to restrict all locators in this context to [visible](../actionability.md#visible) elements.
+Defaults to `false`. When enabled, actions, assertions and queries behave as if [`method: Locator.visible`]
+were appended to the end of the locator chain, unless its last part is an explicit visibility filter.
+For example, `.filter({ visible: false })` at the end of a locator selects hidden elements even when this
+option is enabled. Intermediate locators and inner locators used in [`method: Locator.filter`] are not
+automatically filtered. This does not change the accessibility rules of [`method: Page.getByRole`]
+or the behavior of selector-based methods such as [`method: Page.querySelector`].
+
 ## context-option-service-worker-policy
 - `serviceWorkers` "ServiceWorkerPolicy" <"allow"|"block">
 
@@ -1167,6 +1196,7 @@ between the same pixel in compared images, between zero (strict) and one (lax), 
 - %%-context-option-recordvideo-dir-%%
 - %%-context-option-recordvideo-size-%%
 - %%-context-option-strict-%%
+- %%-context-option-locate-only-visible-%%
 - %%-context-option-service-worker-policy-%%
 
 ## browser-option-args
@@ -1764,6 +1794,8 @@ await page.GetByAltText("Playwright logo").ClickAsync();
 ## template-locator-get-by-label-text
 
 Allows locating input elements by the text of the associated `<label>` or `aria-labelledby` element, or by the `aria-label` attribute.
+
+Associated `<label>` elements are also supported for form-associated custom elements.
 
 **Usage**
 

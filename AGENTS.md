@@ -53,7 +53,7 @@ Assume watch is running and code is up to date. Generated files (types, channels
 npm run flint
 ```
 
-Runs all lint checks in parallel: eslint, tsc, doclint, check-deps, generate_channels, generate_types, lint-tests, test-types, lint-packages, code-snippet linting.
+Runs all lint checks in parallel: eslint, tsc, doclint, check-deps, generate_channels, generate_types, lint-tests, test-types, lint-packages, code-snippet linting, check-dependency-age (every version in `package-lock.json` must be at least 7 days old).
 
 **Run `flint` only before you upload a PR, and only after `npm run build`.** Do not run it before each commit. Do not use `tsc --noEmit` or individual lint commands separately.
 
@@ -173,6 +173,13 @@ not literally named above, the answer is still no.
 **Never amend commits.** Always create a new commit for follow-up changes, even when iterating on an open PR. Amending rewrites history and forces a force-push, losing the incremental review trail. Only amend if the user explicitly says so.
 
 **Never `git push` without an explicit instruction to push.** Applies even when a PR is already open for the branch — additional commits are immediately visible to reviewers. Commit locally, report what was committed, and wait. Only push when the user's message contains "push", "upload", "create PR", "ship it", or equivalent.
+
+## Browser bugs
+
+When the root cause is in a browser and the fix does not belong in this repo:
+
+- **Firefox and WebKit** are built in `microsoft/playwright-browsers`. File the bug as an issue there, labeled `browser-firefox` or `browser-webkit`, with the condensed Playwright test as the repro and a link to the Playwright issue.
+- **Chromium** bugs go upstream, to https://crbug.com/new, with a repro that needs no Playwright: a plain page or CDP commands. Only a person can file there.
 
 ## Development Guides
 

@@ -3100,6 +3100,8 @@ export interface Page {
    * Allows locating input elements by the text of the associated `<label>` or `aria-labelledby` element, or by the
    * `aria-label` attribute.
    *
+   * Associated `<label>` elements are also supported for form-associated custom elements.
+   *
    * **Usage**
    *
    * For example, this method will find inputs by label "Username" and "Password" in the following DOM:
@@ -7483,6 +7485,8 @@ export interface Frame {
    * Allows locating input elements by the text of the associated `<label>` or `aria-labelledby` element, or by the
    * `aria-label` attribute.
    *
+   * Associated `<label>` elements are also supported for form-associated custom elements.
+   *
    * **Usage**
    *
    * For example, this method will find inputs by label "Username" and "Password" in the following DOM:
@@ -11521,6 +11525,20 @@ export interface Browser {
      * locale. Learn more about emulation in our [emulation guide](https://playwright.dev/docs/emulation#locale--timezone).
      */
     locale?: string;
+
+    /**
+     * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
+     * `false`. When enabled, actions, assertions and queries behave as if
+     * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
+     * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
+     * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
+     * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
+     * automatically filtered. This does not change the accessibility rules of
+     * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
+     * selector-based methods such as
+     * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
+     */
+    locateOnlyVisible?: boolean;
 
     /**
      * Logger sink for Playwright logging.
@@ -15753,6 +15771,8 @@ export interface Locator {
    * Allows locating input elements by the text of the associated `<label>` or `aria-labelledby` element, or by the
    * `aria-label` attribute.
    *
+   * Associated `<label>` elements are also supported for form-associated custom elements.
+   *
    * **Usage**
    *
    * For example, this method will find inputs by label "Username" and "Password" in the following DOM:
@@ -17949,6 +17969,20 @@ export interface BrowserType<Unused = {}> {
     locale?: string;
 
     /**
+     * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
+     * `false`. When enabled, actions, assertions and queries behave as if
+     * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
+     * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
+     * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
+     * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
+     * automatically filtered. This does not change the accessibility rules of
+     * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
+     * selector-based methods such as
+     * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
+     */
+    locateOnlyVisible?: boolean;
+
+    /**
      * Logger sink for Playwright logging.
      * @deprecated The logs received by the logger are incomplete. Please use tracing instead.
      */
@@ -19879,9 +19913,16 @@ export interface APIRequestContext {
    */
   delete<T = any>(url: string, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -20021,9 +20062,16 @@ export interface APIRequestContext {
    */
   fetch<T = any>(urlOrRequest: string|Request, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -20150,9 +20198,16 @@ export interface APIRequestContext {
    */
   get<T = any>(url: string, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -20247,9 +20302,16 @@ export interface APIRequestContext {
    */
   head<T = any>(url: string, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -20344,9 +20406,16 @@ export interface APIRequestContext {
    */
   patch<T = any>(url: string, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -20483,9 +20552,16 @@ export interface APIRequestContext {
    */
   post<T = any>(url: string, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -20580,9 +20656,16 @@ export interface APIRequestContext {
    */
   put<T = any>(url: string, options?: {
     /**
-     * Allows to set post data of the request. If the data parameter is an object, it will be serialized to json string
-     * and `content-type` header will be set to `application/json` if not explicitly set. Otherwise the `content-type`
-     * header will be set to `application/octet-stream` if not explicitly set.
+     * Allows to set post data of the request. If the data parameter is an object other than a [Buffer], it will be
+     * serialized to JSON and the `content-type` header will be set to `application/json` if not explicitly set.
+     *
+     * If the data parameter is a string and the explicitly set `content-type` is `application/json` (case-insensitive,
+     * with optional parameters such as `charset=utf-8`), the string is sent as is if it parses as JSON. Otherwise, it is
+     * JSON-encoded as a string, including quotes and escaping. Strings with other content types are sent as is.
+     *
+     * Pass a [Buffer], such as `Buffer.from(body, 'utf8')`, to send exact bytes without JSON encoding, for example to
+     * send deliberately malformed JSON or a body used to compute a signature. For strings and buffers, the `content-type`
+     * header defaults to `application/octet-stream` if not explicitly set.
      */
     data?: string|Buffer|Serializable;
 
@@ -21820,6 +21903,8 @@ export interface FrameLocator {
   /**
    * Allows locating input elements by the text of the associated `<label>` or `aria-labelledby` element, or by the
    * `aria-label` attribute.
+   *
+   * Associated `<label>` elements are also supported for form-associated custom elements.
    *
    * **Usage**
    *
@@ -25178,6 +25263,20 @@ export interface AndroidDevice {
     locale?: string;
 
     /**
+     * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
+     * `false`. When enabled, actions, assertions and queries behave as if
+     * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
+     * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
+     * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
+     * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
+     * automatically filtered. This does not change the accessibility rules of
+     * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
+     * selector-based methods such as
+     * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
+     */
+    locateOnlyVisible?: boolean;
+
+    /**
      * Logger sink for Playwright logging.
      * @deprecated The logs received by the logger are incomplete. Please use tracing instead.
      */
@@ -26419,6 +26518,20 @@ export interface BrowserContextOptions {
    * locale. Learn more about emulation in our [emulation guide](https://playwright.dev/docs/emulation#locale--timezone).
    */
   locale?: string;
+
+  /**
+   * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
+   * `false`. When enabled, actions, assertions and queries behave as if
+   * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
+   * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
+   * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
+   * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
+   * automatically filtered. This does not change the accessibility rules of
+   * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
+   * selector-based methods such as
+   * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
+   */
+  locateOnlyVisible?: boolean;
 
   /**
    * Logger sink for Playwright logging.
