@@ -16,7 +16,7 @@
 
 import { debugLog } from './relayConnection';
 import { PendingConnections } from './pendingConnection';
-import { ConnectedTabGroup, cleanupStalePlaywrightGroups, isNonDebuggableUrl, ungroupTabs, uniqueGroupStyle } from './connectedTabGroup';
+import { ConnectedTabGroup, isNonDebuggableUrl, ungroupTabs, uniqueGroupStyle } from './connectedTabGroup';
 
 type PageMessage = {
   type: 'connectionRequested';
@@ -44,14 +44,10 @@ class PlaywrightExtension {
   private _connections = new Map<number, ConnectedTabGroup>();
   private _lastConnectionId = 0;
   private _pendingConnections = new PendingConnections();
-  // Service worker restarts lose all connection state, so any existing
-  // Playwright groups are stale. Connections wait on this before reconciling.
-  private _cleanupPromise: Promise<void>;
-
   constructor() {
+    // A restarted worker has no proof that pre-existing groups belong to it.
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
     chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
-    this._cleanupPromise = cleanupStalePlaywrightGroups();
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
@@ -103,7 +99,6 @@ class PlaywrightExtension {
 
   private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, tabGroup: boolean, background: boolean): Promise<void> {
     try {
-      await this._cleanupPromise;
       this._releaseTab(selectorTabId);
       if (tab.id !== selectorTabId && this._connectedTabIds().has(tab.id))
         throw new Error('This tab is already connected to another client');

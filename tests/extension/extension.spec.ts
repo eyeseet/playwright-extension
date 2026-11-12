@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+// eslint-disable-next-line spaced-comment
+/// <reference types="chrome" />
+
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -661,6 +664,48 @@ test(`reconnects after the extension connection drops`, {
   })).toHaveResponse({
     snapshot: expect.stringContaining(`Hello, world!`),
   });
+});
+
+test('closing the last relay tab ungroups it first and preserves unrelated groups', async ({ browserWithExtension, server }) => {
+  const browserContext = await browserWithExtension.launch();
+  const extensionOrigin = `chrome-extension://${extensionId}`;
+  const observer = await browserContext.newPage();
+  await observer.goto(extensionOrigin + '/status.html');
+  const ordinary = await observer.evaluate(async () => {
+    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    const id = await chrome.tabs.group({ createProperties: { windowId: tab.windowId }, tabIds: [tab.id!] });
+    await chrome.tabGroups.update(id, { title: 'Playwright · User-created group' });
+    return id;
+  });
+  const connectPage = await browserContext.newPage();
+  const url = new URL(extensionOrigin + '/connect.html');
+  url.searchParams.set('mcpRelayUrl', `ws://127.0.0.1:${server.PORT}/ws`);
+  url.searchParams.set('protocolVersion', '2');
+  url.searchParams.set('client', JSON.stringify({ name: 'Cleanup test' }));
+  const connecting = server.waitForWebSocket();
+  await connectPage.goto(url.href);
+  const tabId = await connectPage.evaluate(async () => (await chrome.tabs.getCurrent())!.id!);
+  await clickAllowAndSelect(connectPage, 'Welcome');
+  const socket = await connecting;
+  await expect(connectPage.locator('.status-banner')).toContainText('connected.');
+  socket.send(JSON.stringify({ id: 1, method: 'chrome.debugger.attach', params: [{ tabId }, '1.3'] }));
+  await expect.poll(() => observer.evaluate(async id => (await chrome.tabs.get(id)).groupId, tabId)).toBeGreaterThanOrEqual(0);
+  await observer.evaluate(id => {
+    const events: string[] = [];
+    Object.assign(globalThis, { closeEvents: events });
+    chrome.tabs.onUpdated.addListener((tabId, change) => {
+      if (tabId === id && change.groupId === -1)
+        events.push('ungrouped');
+    });
+    chrome.tabs.onRemoved.addListener(tabId => {
+      if (tabId === id)
+        events.push('closed');
+    });
+  }, tabId);
+
+  socket.send(JSON.stringify({ id: 2, method: 'chrome.tabs.remove', params: [tabId] }));
+  await expect.poll(() => observer.evaluate(() => (globalThis as typeof globalThis & { closeEvents: string[] }).closeEvents)).toEqual(['ungrouped', 'closed']);
+  expect(await observer.evaluate(async id => (await chrome.tabGroups.get(id)).title, ordinary)).toBe('Playwright · User-created group');
 });
 
 test(`relay rejects websocket upgrades with forged host or origin`, {

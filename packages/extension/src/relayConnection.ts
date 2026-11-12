@@ -73,6 +73,7 @@ export class RelayConnection {
   onclose?: () => void;
   ontabattached?: (tabId: number) => void;
   ontabdetached?: (tabId: number) => void;
+  onremovetabs?: (tabIds: number | number[]) => Promise<void>;
 
   get isClosed(): boolean {
     return this._closed;
@@ -303,6 +304,10 @@ export class RelayConnection {
     const args = (message.params ?? []) as any[];
     if (this.background && message.method === 'chrome.tabs.create')
       args[0] = { ...args[0], active: false };
+    if (message.method === 'chrome.tabs.remove' && this.onremovetabs) {
+      await this.onremovetabs(args[0]);
+      return {};
+    }
     const result = await invokeChromeMethod(message.method, args);
     // Attach bookkeeping; detach flows through the chrome.debugger.onDetach event.
     if (message.method === 'chrome.debugger.attach') {

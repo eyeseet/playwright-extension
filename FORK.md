@@ -4,7 +4,7 @@ This is a public fork of [microsoft/playwright](https://github.com/microsoft/pla
 
 ## Baseline and branches
 
-- Baseline: upstream commit `71350712ca049af48d50f8d23441c6ac82a21da0`, extension **0.5.0**.
+- Baseline: upstream commit `bac1f9f67e9cff2a8e7ecbac25d56ec3bb1d15c6`, extension **0.5.0**.
 - `main`: unchanged upstream baseline; keep this branch aligned with upstream.
 - `extension-repairs`: the maintained extension changes. Use this branch for builds.
 
@@ -13,6 +13,7 @@ The earlier local prototype was based on extension 0.4.0. This branch ports the 
 ## Changes
 
 - Serialize tab-group creation so concurrent debugger attachments create one group.
+- Ungroup a verified Playwright group before closing its final tabs. Preserve existing groups on service-worker startup. See [Chrome tab-group cleanup](maintenance/README.md#chrome-tab-group-cleanup) for the Windows relay and Chrome API limits.
 - Stop repeated temporary debugger detaches from closing a connection merely because a short cooldown has elapsed.
 - Try recovery at most three times. Confirm tab removal before closing an empty connection; when a living tab cannot be recovered, keep its transport and emit a diagnostic event. This avoids endless reconnects but does not guarantee the unrecovered tab is usable.
 - Emit optional `extension.audit` events containing event names and numeric tab/group identifiers. No URLs, tokens, page contents or form values are sent in those events. The stock relay ignores these events; a compatible local relay may store them.

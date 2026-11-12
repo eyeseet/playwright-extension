@@ -46,21 +46,6 @@ export function uniqueGroupStyle(clientName: string | undefined, taken: readonly
   return { title, color };
 }
 
-// Ungroups any Playwright-titled groups left behind by a prior service worker.
-export async function cleanupStalePlaywrightGroups(): Promise<void> {
-  try {
-    const groups = await chrome.tabGroups.query({});
-    // The bare title comes from versions that predate per-client groups.
-    const stale = groups.filter(g => g.title === PLAYWRIGHT_GROUP_TITLE || g.title?.startsWith(PLAYWRIGHT_GROUP_TITLE_PREFIX));
-    const tabsPerGroup = await Promise.all(stale.map(g => chrome.tabs.query({ groupId: g.id })));
-    const tabIds = tabsPerGroup.flat().map(t => t.id).filter((id): id is number => id !== undefined);
-    if (tabIds.length)
-      await ungroupTabs(tabIds);
-  } catch (error: any) {
-    debugLog('Error cleaning up stale groups:', error);
-  }
-}
-
 // The controlled tabs for an active RelayConnection. When grouping is enabled,
 // the Chrome tab group is the single source of truth for which tabs the client targets:
 //  - User drags a tab in/out → `_onTabGroupChanged` attaches/detaches.
@@ -77,6 +62,7 @@ export class ConnectedTabGroup {
   private _groupId: number | null = null;
   private _groupQueue: Promise<void> = Promise.resolve();
   private _groupTabIds: Set<number> = new Set();
+  private _ungroupingForClose = new Set<number>();
   private _onTabUpdatedListener: (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void;
   private _onTabRemovedListener: (tabId: number) => void;
 
@@ -90,6 +76,7 @@ export class ConnectedTabGroup {
     this._connection.onclose = () => this._onConnectionClose();
     this._connection.ontabattached = (tabId: number) => this._onTabAttached(tabId);
     this._connection.ontabdetached = (tabId: number) => this._onTabDetached(tabId);
+    this._connection.onremovetabs = tabIds => this._removeTabs(tabIds);
     this._onTabUpdatedListener = this._onTabUpdated.bind(this);
     this._onTabRemovedListener = this._onTabRemoved.bind(this);
     chrome.tabs.onUpdated.addListener(this._onTabUpdatedListener);
@@ -118,7 +105,7 @@ export class ConnectedTabGroup {
   }
 
   private _onTabUpdated(tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab): void {
-    if (this.groupStyle && changeInfo.groupId !== undefined)
+    if (this.groupStyle && changeInfo.groupId !== undefined && !(changeInfo.groupId === -1 && this._ungroupingForClose.has(tabId)))
       this._onTabGroupChanged(tabId, tab);
     if (changeInfo.url === undefined)
       return;
@@ -179,11 +166,63 @@ export class ConnectedTabGroup {
   private _onConnectionClose(): void {
     chrome.tabs.onUpdated.removeListener(this._onTabUpdatedListener);
     chrome.tabs.onRemoved.removeListener(this._onTabRemovedListener);
-    const groupTabs = [...this._groupTabIds];
-    this._groupTabIds.clear();
-    if (this.groupStyle && groupTabs.length)
-      void ungroupTabs(groupTabs);
-    this.onclose?.();
+    void this._groupQueue.then(async () => {
+      try {
+        await this._ungroupOwnedGroup(this._groupTabIds);
+      } catch (error) {
+        debugLog('Error cleaning up disconnected group:', error);
+      } finally {
+        this._groupTabIds.clear();
+        this.onclose?.();
+      }
+    });
+  }
+
+  private async _ungroupOwnedGroup(allowedTabs: ReadonlySet<number>): Promise<void> {
+    const groupId = this._groupId;
+    const title = this.groupStyle?.title;
+    if (groupId === null || !title || title.startsWith(PLAYWRIGHT_GROUP_TITLE_PREFIX + 'Playwright Window Router'))
+      return;
+    await retryOnDrag(async () => {
+      const [first, ...rest] = await chrome.tabs.query({ groupId });
+      if (first?.id === undefined || !allowedTabs.has(first.id) || rest.some(tab => tab.id === undefined || !allowedTabs.has(tab.id)))
+        return;
+      const group = await chrome.tabGroups.get(groupId).catch(() => undefined);
+      if (!group || group.title !== title || ('shared' in group && group.shared))
+        return;
+      await chrome.tabs.ungroup([first.id, ...rest.map(tab => tab.id!)]);
+      this._groupId = null;
+    });
+  }
+
+  private _removeTabs(tabIds: number | number[]): Promise<void> {
+    const ids = Array.isArray(tabIds) ? tabIds : [tabIds];
+    const task = this._groupQueue.then(async () => {
+      if (this._connection.isClosed || ids.some(id => !this._connection.attachedTabs.has(id)))
+        throw new Error('Cannot close tabs outside this Playwright connection');
+      this._ungroupingForClose = new Set(ids);
+      try {
+        const closing = new Set(ids.filter(id => this._groupTabIds.has(id)));
+        await this._ungroupOwnedGroup(closing);
+        if (this.groupStyle) {
+          const tabs = await Promise.all(ids.map(id => chrome.tabs.get(id)));
+          for (const tab of tabs) {
+            if (tab.groupId === -1)
+              continue;
+            const group = await chrome.tabGroups.get(tab.groupId);
+            if (group.id !== this._groupId || group.title !== this.groupStyle.title || ('shared' in group && group.shared))
+              throw new Error('The tab moved to a group outside this Playwright connection');
+          }
+        }
+        if (this._connection.isClosed || ids.some(id => !this._connection.attachedTabs.has(id)))
+          throw new Error('Playwright connection no longer controls these tabs');
+        await chrome.tabs.remove(ids);
+      } finally {
+        this._ungroupingForClose.clear();
+      }
+    });
+    this._groupQueue = task.catch(() => {});
+    return task;
   }
 
   private async _updateBadge(tabId: number, { text, color, title }: { text: string; color?: string, title?: string }): Promise<void> {
