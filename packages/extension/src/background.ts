@@ -31,6 +31,7 @@ type PageMessage = {
   clientName?: string;
   tabGroup?: boolean;
   background?: boolean;
+  preserveGroupOnDisconnect?: boolean;
 } | {
   type: 'getConnectionStatus';
 } | {
@@ -72,7 +73,7 @@ class PlaywrightExtension {
         // sender.tab and UI-supplied tabs come from chrome.tabs.query / runtime
         // message sender, where `id` is always defined.
         const selectedTab = (message.tab ?? sender.tab!) as chrome.tabs.Tab & { id: number };
-        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, message.tabGroup !== false, !!message.background).then(
+        this._connectTab(sender.tab!.id!, selectedTab, message.clientName, message.tabGroup !== false, !!message.background, message.preserveGroupOnDisconnect === true).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
@@ -97,7 +98,7 @@ class PlaywrightExtension {
     }
   }
 
-  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, tabGroup: boolean, background: boolean): Promise<void> {
+  private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined, tabGroup: boolean, background: boolean, preserveGroupOnDisconnect: boolean): Promise<void> {
     try {
       this._releaseTab(selectorTabId);
       if (tab.id !== selectorTabId && this._connectedTabIds().has(tab.id))
@@ -110,7 +111,7 @@ class PlaywrightExtension {
       connection.background = background;
       const id = ++this._lastConnectionId;
       const taken = [...this._connections.values()].flatMap(group => group.groupStyle ? [group.groupStyle] : []);
-      const group = new ConnectedTabGroup(connection, tab, clientName, tabGroup ? uniqueGroupStyle(clientName, taken) : undefined, tabId => this._pendingConnections.has(tabId));
+      const group = new ConnectedTabGroup(connection, tab, clientName, tabGroup ? uniqueGroupStyle(clientName, taken) : undefined, tabId => this._pendingConnections.has(tabId), preserveGroupOnDisconnect);
       group.onclose = () => this._connections.delete(id);
       this._connections.set(id, group);
 

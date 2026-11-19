@@ -64,6 +64,18 @@ test('disconnect waits for group creation and leaves ungrouped tabs open', async
   assert.deepEqual([...tabs.keys()], [1, 2, 3]);
 });
 
+test('VPS disconnect leaves the group intact for the server to manage', async () => {
+  const { group, actions, tabs } = cleanupFixture();
+  group._preserveGroupOnDisconnect = true;
+  await new Promise(resolve => {
+    group.onclose = resolve;
+    group._onConnectionClose();
+  });
+  assert.deepEqual(actions, []);
+  assert.equal(tabs.get(1).groupId, 100);
+  assert.equal(tabs.get(2).groupId, 100);
+});
+
 function cleanupFixture() {
   const f = fixture();
   const actions = [];

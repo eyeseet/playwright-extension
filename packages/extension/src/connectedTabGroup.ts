@@ -59,6 +59,7 @@ export class ConnectedTabGroup {
   readonly groupStyle: GroupStyle | undefined;
   private _connection: RelayConnection;
   private _isTabReserved: (tabId: number) => boolean;
+  private _preserveGroupOnDisconnect: boolean;
   private _groupId: number | null = null;
   private _groupQueue: Promise<void> = Promise.resolve();
   private _groupTabIds: Set<number> = new Set();
@@ -68,10 +69,11 @@ export class ConnectedTabGroup {
 
   onclose?: () => void;
 
-  constructor(connection: RelayConnection, selectedTab: chrome.tabs.Tab, clientName: string | undefined, groupStyle: GroupStyle | undefined, isTabReserved: (tabId: number) => boolean) {
+  constructor(connection: RelayConnection, selectedTab: chrome.tabs.Tab, clientName: string | undefined, groupStyle: GroupStyle | undefined, isTabReserved: (tabId: number) => boolean, preserveGroupOnDisconnect = false) {
     this.clientName = clientName;
     this.groupStyle = groupStyle;
     this._isTabReserved = isTabReserved;
+    this._preserveGroupOnDisconnect = preserveGroupOnDisconnect;
     this._connection = connection;
     this._connection.onclose = () => this._onConnectionClose();
     this._connection.ontabattached = (tabId: number) => this._onTabAttached(tabId);
@@ -168,7 +170,8 @@ export class ConnectedTabGroup {
     chrome.tabs.onRemoved.removeListener(this._onTabRemovedListener);
     void this._groupQueue.then(async () => {
       try {
-        await this._ungroupOwnedGroup(this._groupTabIds);
+        if (!this._preserveGroupOnDisconnect)
+          await this._ungroupOwnedGroup(this._groupTabIds);
       } catch (error) {
         debugLog('Error cleaning up disconnected group:', error);
       } finally {

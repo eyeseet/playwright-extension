@@ -28,6 +28,7 @@ type Status =
 const SUPPORTED_PROTOCOL_VERSION = 2;
 const tabGroup = new URLSearchParams(window.location.search).get('tabGroup') !== 'false';
 const background = new URLSearchParams(window.location.search).get('background') === 'true';
+const preserveGroupOnDisconnect = new URLSearchParams(window.location.search).get('preserveGroupOnDisconnect') === 'true';
 
 // Client name comes from the URL and never changes for the lifetime of this page.
 const clientInfo = (() => {
@@ -146,6 +147,7 @@ const ConnectApp: React.FC = () => {
         clientName: clientInfo,
         tabGroup,
         background,
+        preserveGroupOnDisconnect,
       });
 
       if (response?.success) {
