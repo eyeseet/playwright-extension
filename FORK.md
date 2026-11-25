@@ -5,10 +5,9 @@ This is a public fork of [microsoft/playwright](https://github.com/microsoft/pla
 ## Baseline and branches
 
 - Baseline: upstream commit `bac1f9f67e9cff2a8e7ecbac25d56ec3bb1d15c6`, extension **0.5.0**.
-- `main`: unchanged upstream baseline; keep this branch aligned with upstream.
-- `extension-repairs`: the maintained extension changes. Use this branch for builds.
+- main is the maintained branch for this fork. Use the commit pinned by the Windows server release when building for deployment.
 
-The earlier local prototype was based on extension 0.4.0. This branch ports the remaining changes to 0.5.0 TypeScript sources instead of checking in patched JavaScript bundles. Version 0.5.0 already supports background connections; this fork preserves that support and also creates new tabs inactive on background connections.
+The earlier local prototype was based on extension 0.4.0. This fork ports the remaining changes to 0.5.0 TypeScript sources instead of checking in patched JavaScript bundles. Version 0.5.0 already supports background connections; this fork preserves that support and also creates new tabs inactive on background connections.
 
 ## Changes
 
@@ -48,13 +47,8 @@ The repository does not publish a prebuilt extension release. A build still need
 git remote add upstream https://github.com/microsoft/playwright.git
 git fetch upstream
 git switch main
-git merge --ff-only upstream/main
-git push origin main
-git switch extension-repairs
-git merge main
+git merge upstream/main
 node --test packages/extension/fork-tests/repairs.test.cjs
 ```
 
-Resolve source conflicts, perform the complete build and browser checks, then push the repair branch. Review each patch: drop a local change once upstream fixes the same behavior. Do not blindly replace generated extension bundles or force-push shared history. If the `upstream` remote already exists, skip `git remote add`.
-
-In GitHub's interface, use **Sync fork** on `main`, then merge `main` into `extension-repairs`. Do not sync the repair branch by discarding local commits.
+Resolve conflicts and run the build and browser checks before pushing main to origin. Drop a fork change once upstream fixes the same behavior. If upstream is already configured, skip the first command.
