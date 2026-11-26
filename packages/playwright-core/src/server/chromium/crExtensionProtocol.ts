@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-// Wire protocol between the CDP relay (this package) and the Playwright
+// Wire protocol between the CDP relay (crExtensionRelay.ts) and the Playwright
 // extension (packages/extension). BrowserModel sends the commands and handles
-// the events. The extension side lives in packages/extension/src/relayConnection.ts:
-// chrome.* commands are allow-listed there and invoked reflectively, anything
-// else needs an explicit handler.
+// the events. The extension side lives in packages/extension/src/clientSession.ts:
+// it runs a command only for a tab that the client owns.
 
 // The protocol version defined in this file. Bumped whenever the
 // commands/events change. Sent to the extension, which rejects clients
@@ -97,7 +96,7 @@ export type ExtensionEvents = {
   'chrome.tabs.onRemoved': {
     params: [tabId: number, removeInfo: TabRemoveInfo];
   };
-  // Playwright-specific: signals end of the initial tab handshake, see cdpRelay.ts.
+  // Playwright-specific: signals end of the initial tab handshake, see crExtensionRelay.ts.
   'extension.initialized': {
     params: [];
   };

@@ -46,7 +46,6 @@ it('WO-002 should emit created and destroyed events', async function({ page }) {
   await page.evaluate(workerObj => workerObj.terminate(), workerObj);
   expect(await workerDestroyedPromise).toBe(worker);
   const error = await workerThisObj.getProperty('self').catch(error => error);
-  expect(error.message).toContain('jsHandle.getProperty');
   expect(error.message).toContain(kTargetClosedErrorMessage);
 });
 
@@ -62,7 +61,7 @@ it('WO-003 should reject in-flight evaluate and emit close when page closes', {
   const evalPromise = worker.evaluate(() => new Promise(() => {})).catch((e: Error) => e);
   await page.close();
   const error = await evalPromise as Error;
-  expect(error.message).toContain('worker.evaluate');
+  expect(error.message).toMatch(/(Target page, context or browser has been closed|Execution context was destroyed)/);
   expect(await closePromise).toBe(worker);
 });
 
@@ -80,12 +79,14 @@ it('WO-005 should have timestamp on worker console messages', async function({ p
   it.skip(isAndroid, 'there is a time difference between android emulator and host machine');
   it.skip(channel === 'webkit-wsl', 'there is a time difference between WSL VM and host machine');
 
-  const before = Date.now() - 1;  // Account for the rounding of fractional timestamps.
+  // The clocks of the browser and of the test process differ by a few milliseconds on Windows.
+  const margin = 10;
+  const before = Date.now() - margin;
   const [message] = await Promise.all([
     page.waitForEvent('console'),
     page.evaluate(() => new Worker(URL.createObjectURL(new Blob(['console.log("ts")'], { type: 'application/javascript' })))),
   ]);
-  const after = Date.now() + 1;  // Account for the rounding of fractional timestamps.
+  const after = Date.now() + margin;
   expect(message.text()).toBe('ts');
   expect(message.timestamp()).toBeGreaterThanOrEqual(before);
   expect(message.timestamp()).toBeLessThanOrEqual(after);
@@ -435,4 +436,35 @@ it('WO-025 should resolve worker script allHeaders in nested worker inside ifram
   const response = await request.response();
   const headers = await response.allHeaders();
   expect(headers['content-type']).toBeTruthy();
+});
+
+it('WO-032 should run a shared worker after redirected dedicated workers', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44134' },
+}, async ({ page, server }) => {
+  for (const name of ['classic', 'module', 'shared']) {
+    server.setRedirect(`/${name}/worker.js`, 'v2/worker.js');
+    server.setRoute(`/${name}/v2/helper.js`, (req, res) => {
+      res.setHeader('Content-Type', 'text/javascript');
+      res.end(name === 'module' ? `export const value = 'v2';` : `self.value = 'v2';`);
+    });
+    server.setRoute(`/${name}/v2/worker.js`, (req, res) => {
+      res.setHeader('Content-Type', 'text/javascript');
+      if (name === 'module')
+        res.end(`import { value } from './helper.js'; postMessage(value);`);
+      else if (name === 'shared')
+        res.end(`importScripts('helper.js'); onconnect = event => event.ports[0].postMessage(self.value);`);
+      else
+        res.end(`importScripts('helper.js'); postMessage(self.value);`);
+    });
+  }
+  await page.goto(server.EMPTY_PAGE);
+  for (const name of ['classic', 'module', 'shared']) {
+    expect(await page.evaluate(name => new Promise((resolve, reject) => {
+      const url = `/${name}/worker.js`;
+      const worker = name === 'shared' ? new SharedWorker(url) : new Worker(url, { type: name === 'module' ? 'module' : 'classic' });
+      worker.onerror = event => reject(new Error(event.message));
+      const port = worker instanceof SharedWorker ? worker.port : worker;
+      port.onmessage = event => resolve(event.data);
+    }), name)).toBe('v2');
+  }
 });

@@ -42,6 +42,10 @@ test('CD-001 should connect to an existing cdp session', {
     expect(contexts.length).toBe(1);
     await cdpBrowser.close();
 
+    const urlBrowser = await browserType.connectOverCDP(`remote-debugging://chromium?${new URLSearchParams({ userDataDir })}`);
+    expect(urlBrowser.contexts().length).toBe(1);
+    await urlBrowser.close();
+
     if (process.platform === 'linux') {
       for (const env of [
         { CHROME_USER_DATA_DIR: '', CHROME_CONFIG_HOME: '', XDG_CONFIG_HOME: configHome },
@@ -169,7 +173,8 @@ test('CD-004 should connect when an existing page has been discarded', {
     await discards.goto('chrome://discards/');
     // Discarding replaces the tab's WebContents, but the url in the table survives.
     const row = discards.getByRole('row', { name: victimUrl });
-    await row.getByText('Urgent Discard').click();
+    // This click hangs on the macOS bots sometimes. The timeout makes the error show the call log.
+    await row.getByText('Urgent Discard').click({ timeout: 10000 });
     await expect(row).toContainText('discarded');
     // The renderer process is shut down asynchronously after the discard.
     await discards.waitForTimeout(3000);
@@ -248,9 +253,10 @@ test('CD-007 should write traces to provided artifactsDir on connectOverCDP', as
     await context.tracing.start({ name: 'cdp-trace', snapshots: true, screenshots: true });
     const page = await context.newPage();
     await page.setContent('<button>Hello</button>');
+    // The trace file of a discarded chunk is removed, check it before the chunk stops.
+    await expect.poll(() => fs.existsSync(path.join(artifactsDir, 'cdp-trace.trace'))).toBe(true);
     await context.tracing.stopChunk();
 
-    expect(fs.existsSync(path.join(artifactsDir, 'cdp-trace.trace'))).toBe(true);
     expect(fs.existsSync(path.join(artifactsDir, 'cdp-trace.network'))).toBe(true);
     expect(fs.existsSync(path.join(artifactsDir, 'resources'))).toBe(true);
 
@@ -577,6 +583,48 @@ test('CD-019 should return valid browser from context.browser()', async ({ brows
   }
 });
 
+test('CD-055 should work with registered selector engines', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44381' },
+}, async ({ playwright, browserType }, testInfo) => {
+  const port = 9339 + testInfo.workerIndex;
+  const browserServer = await browserType.launch({
+    args: ['--remote-debugging-port=' + port]
+  });
+  try {
+    await playwright.selectors.register('cdpTag', () => ({
+      query: (root, selector) => root.querySelector(selector),
+      queryAll: (root, selector) => Array.from(root.querySelectorAll(selector)),
+    }));
+    const cdpBrowser = await browserType.connectOverCDP(`http://127.0.0.1:${port}/`);
+    const page = await cdpBrowser.contexts()[0].newPage();
+    await page.setContent('<div>hello</div>');
+    expect(await page.locator('cdpTag=div').textContent()).toBe('hello');
+    await cdpBrowser.close();
+  } finally {
+    await browserServer.close();
+  }
+});
+
+test('CD-056 should respect the test id attribute in strict mode errors', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44381' },
+}, async ({ playwright, browserType }, testInfo) => {
+  const port = 9339 + testInfo.workerIndex;
+  const browserServer = await browserType.launch({
+    args: ['--remote-debugging-port=' + port]
+  });
+  try {
+    playwright.selectors.setTestIdAttribute('data-foo');
+    const cdpBrowser = await browserType.connectOverCDP(`http://127.0.0.1:${port}/`);
+    const page = await cdpBrowser.contexts()[0].newPage();
+    await page.setContent('<button data-foo="a">x</button><button data-foo="b">x</button>');
+    await expect(page.locator('button').click()).rejects.toThrow(`aka getByTestId('a')`);
+    await cdpBrowser.close();
+  } finally {
+    playwright.selectors.setTestIdAttribute('data-testid');
+    await browserServer.close();
+  }
+});
+
 test('CD-020 should report an expected error when the endpointURL returns a non-expected status code', async ({ browserType, server }) => {
   server.setRoute('/json/version/', (req, resp) => {
     resp.statusCode = 404;
@@ -586,7 +634,7 @@ test('CD-020 should report an expected error when the endpointURL returns a non-
   });
   await expect(browserType.connectOverCDP({
     endpointURL: server.PREFIX,
-  })).rejects.toThrowError(`browserType.connectOverCDP: Unexpected status 404 when connecting to ${server.PREFIX}/json/version/`);
+  })).rejects.toThrowError(`Unexpected status 404 when connecting to ${server.PREFIX}/json/version/`);
 });
 
 test('CD-021 should report an expected error when the endpoint URL JSON webSocketDebuggerUrl is undefined', async ({ browserType, server }) => {
@@ -597,7 +645,7 @@ test('CD-021 should report an expected error when the endpoint URL JSON webSocke
   });
   await expect(browserType.connectOverCDP({
     endpointURL: server.PREFIX,
-  })).rejects.toThrowError('browserType.connectOverCDP: Invalid URL');
+  })).rejects.toThrowError('Invalid URL');
 });
 
 test('CD-022 should connect to an existing cdp session when passed as a first argument', async ({ browserType }, testInfo) => {
@@ -946,6 +994,50 @@ test('CD-036 should connect over CDP using a ConnectionTransport', async ({ brow
     await page.goto(server.EMPTY_PAGE);
     expect(page.url()).toBe(server.EMPTY_PAGE);
     await cdpBrowser.close();
+  } finally {
+    await browserServer.close();
+  }
+});
+
+test('CD-054 should not wait for a busy page longer than maxPageAttachTime', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44052' },
+}, async ({ browserType, server }, testInfo) => {
+  const port = 9339 + testInfo.workerIndex;
+  const browserServer = await browserType.launch({
+    // The busy page should not share a renderer with the other page.
+    args: ['--remote-debugging-port=' + port, '--site-per-process']
+  });
+  try {
+    const cdpBrowser1 = await browserType.connectOverCDP({
+      endpointURL: `http://127.0.0.1:${port}/`,
+    });
+    const context1 = cdpBrowser1.contexts()[0];
+    const page1 = await context1.newPage();
+    await page1.goto(server.CROSS_PROCESS_PREFIX + '/title.html');
+    const busyPage1 = await context1.newPage();
+    await busyPage1.goto(server.EMPTY_PAGE);
+    const busyStarted = busyPage1.waitForEvent('console', message => message.text() === 'busy');
+    busyPage1.evaluate(() => {
+      console.log('busy');
+      const start = Date.now();
+      while (Date.now() - start < 5000) {}
+    }).catch(() => {});
+    await busyStarted;
+
+    const cdpBrowser2 = await browserType.connectOverCDP({
+      endpointURL: `http://127.0.0.1:${port}/`,
+      maxPageAttachTime: 500,
+    } as any);
+    const context2 = cdpBrowser2.contexts()[0];
+    const pages = context2.pages();
+    expect(pages.map(page => page.url())).toEqual([server.CROSS_PROCESS_PREFIX + '/title.html']);
+    expect(await pages[0].title()).toBe('Woof-Woof');
+    // The busy page is reported when its renderer responds again.
+    const busyPage2 = await context2.waitForEvent('page');
+    expect(busyPage2.url()).toBe(server.EMPTY_PAGE);
+    expect(await busyPage2.evaluate(() => 1 + 1)).toBe(2);
+    await cdpBrowser2.close();
+    await cdpBrowser1.close();
   } finally {
     await browserServer.close();
   }

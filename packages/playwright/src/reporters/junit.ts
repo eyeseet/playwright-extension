@@ -16,8 +16,10 @@
 
 import fs from 'fs';
 import path from 'path';
+import { StringDecoder } from 'string_decoder';
 
 import { getAsBooleanFromENV } from '@utils/env';
+import { toPosixPath } from '@utils/fileUtils';
 
 import { createTestFilter, filterTests, formatFailure, nonTerminalScreen, resolveOutputFile, visitTests } from './base';
 import { stripAnsiEscapes } from '../util';
@@ -41,6 +43,8 @@ class JUnitReporter implements ReporterV2 {
   private includeProjectInTestName = false;
   private includeRetries = false;
   private omitTags = false;
+  private addFileAttribute = false;
+  private fileRoot: string;
   private testFilter: TestFilter | undefined;
 
   constructor(options: JUnitReporterOptions & CommonReporterOptions) {
@@ -49,6 +53,9 @@ class JUnitReporter implements ReporterV2 {
     this.includeProjectInTestName = getAsBooleanFromENV('PLAYWRIGHT_JUNIT_INCLUDE_PROJECT_IN_TEST_NAME', !!options.includeProjectInTestName);
     this.includeRetries = !!this.testFilter || getAsBooleanFromENV('PLAYWRIGHT_JUNIT_INCLUDE_RETRIES', !!options.includeRetries);
     this.omitTags = getAsBooleanFromENV('PLAYWRIGHT_JUNIT_OMIT_TAGS', !!options.omitTags);
+    this.addFileAttribute = getAsBooleanFromENV('PLAYWRIGHT_JUNIT_ADD_FILE_ATTRIBUTE', !!options.addFileAttribute);
+    const fileRootEnv = process.env.PLAYWRIGHT_JUNIT_FILE_ROOT;
+    this.fileRoot = fileRootEnv ? path.resolve(process.cwd(), fileRootEnv) : path.resolve(options.configDir, options.fileRoot || '');
     this.configDir = options.configDir;
     this.resolvedOutputFile = resolveOutputFile('JUNIT', options)?.outputFile;
   }
@@ -160,6 +167,8 @@ class JUnitReporter implements ReporterV2 {
       },
       children: [],
     };
+    if (this.addFileAttribute)
+      entry.attributes!.file = toPosixPath(path.relative(this.fileRoot, test.location.file));
     entries.push(entry);
 
     // Xray Test Management supports testcase level properties, where additional metadata may be provided
@@ -246,10 +255,10 @@ class JUnitReporter implements ReporterV2 {
     const systemOut: string[] = [];
     const systemErr: string[] = [];
     for (const result of results) {
-      for (const item of result.stdout)
-        systemOut.push(item.toString());
-      for (const item of result.stderr)
-        systemErr.push(item.toString());
+      if (result.stdout.length)
+        systemOut.push(decodeOutput(result.stdout));
+      if (result.stderr.length)
+        systemErr.push(decodeOutput(result.stderr));
       for (const attachment of result.attachments) {
         if (!attachment.path)
           continue;
@@ -290,6 +299,14 @@ class JUnitReporter implements ReporterV2 {
     await this._appendStdIO(entry, [result]);
     return entry;
   }
+}
+
+function decodeOutput(chunks: (string | Buffer)[]): string {
+  const decoder = new StringDecoder('utf8');
+  let output = '';
+  for (const chunk of chunks)
+    output += typeof chunk === 'string' ? decoder.end() + chunk : decoder.write(chunk);
+  return output + decoder.end();
 }
 
 type ErrorInfo = { elementName: 'failure' | 'error'; type: string; message: string };

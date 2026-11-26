@@ -49,7 +49,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `CM` | Console messages | `page/page-event-console` |
 | `CN` | Channels | `library/channels` |
 | `CO` | Cookies | `library/{browsercontext-cookies, browsercontext-add-cookies, browsercontext-clearcookies, browsercontext-cookies-third-party}` |
-| `CR` | Chromium | `library/chromium/{chromium, launcher, extensions, bfcache, connect-to-worker, disable-web-security}` |
+| `CR` | Chromium | `library/chromium/{chromium, launcher, extensions, bfcache, disable-web-security}` |
 | `CS` | CSP | `library/browsercontext-csp` |
 | `CV` | Coverage | `library/chromium/{js-coverage, css-coverage}`<br>`library/coverage` |
 | `DB` | Debug | `library/{debugger, debug-controller}` |
@@ -583,7 +583,6 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `BT-076` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › should upload large file *(2 copies)* |
 | `BT-077` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › should upload a folder *(2 copies)* |
 | `BT-078` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › setInputFiles should preserve lastModified timestamp *(2 copies)* |
-| `BT-079` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › should connect over http *(2 copies)* |
 | `BT-080` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › socks proxy › should forward non-forwarded requests *(2 copies)* |
 | `BT-081` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › socks proxy › should proxy localhost requests @smoke *(2 copies)* |
 | `BT-082` | `library/browsertype-connect.spec.ts` | {launchServer, run-server} › socks proxy › should proxy ipv6 localhost requests @smoke *(2 copies)* |
@@ -599,16 +598,16 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `BT-092` | `library/browsertype-connect.spec.ts` | launchServer only › cannot launch another browser |
 | `BT-093` | `library/browsertype-connect.spec.ts` | should refuse connecting when versions do not match |
 | `BT-094` | `library/browsertype-connect.spec.ts` | should filter local paths from unsafe launch options |
-| `BT-095` | `library/browsertype-connect.spec.ts` | should timeout after redirect when connecting over http |
 | `BT-096` | `library/browsertype-connect.spec.ts` | should not retain closed browsers in launch mode |
 | `BT-097` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 3.141.59 standalone chromium |
 | `BT-098` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 3.141.59 hub + node chromium |
-| `BT-099` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 4.8.3 standalone chromium |
-| `BT-100` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 4.8.3 hub + node chromium |
-| `BT-101` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 4.8.3 standalone chromium broken driver |
+| `BT-099` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 4.11.0 standalone chromium |
+| `BT-100` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 4.11.0 hub + node chromium |
+| `BT-101` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 4.11.0 standalone chromium broken driver |
 | `BT-102` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 3.141.59 standalone non-chromium |
 | `BT-103` | `library/browsertype-launch-selenium.spec.ts` | selenium grid 3.141.59 standalone chromium through run-driver |
 | `BT-104` | `library/browsertype-launch-server.spec.ts` | launch server › should handle timeout |
+| `BT-105` | `library/browsertype-connect.spec.ts` | run-server should exit when stdin closes |
 
 ### BU — Before unload
 
@@ -766,6 +765,9 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `CD-051` | `library/chromium/session.spec.ts` | should emit close event when page closes |
 | `CD-052` | `library/chromium/session.spec.ts` | should work with newBrowserCDPSession |
 | `CD-053` | `library/chromium/connect-over-cdp.spec.ts` | should connect when another client inspects a terminated shared worker |
+| `CD-054` | `library/chromium/connect-over-cdp.spec.ts` | should not wait for a busy page longer than maxPageAttachTime |
+| `CD-055` | `library/chromium/connect-over-cdp.spec.ts` | should work with registered selector engines |
+| `CD-056` | `library/chromium/connect-over-cdp.spec.ts` | should respect the test id attribute in strict mode errors |
 
 ### CF — Code frame
 
@@ -1502,8 +1504,6 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `CR-040` | `library/chromium/extensions.spec.ts` | MV3 › should report console messages from content script |
 | `CR-041` | `library/chromium/extensions.spec.ts` | MV3 › should use custom userAgent in service worker fetch requests |
 | `CR-042` | `library/chromium/bfcache.spec.ts` | bindings should work after restoring from bfcache |
-| `CR-043` | `library/chromium/connect-to-worker.spec.ts` | should connect, evaluate, receive console and disconnect |
-| `CR-044` | `library/chromium/connect-to-worker.spec.ts` | should receive close when node process exits |
 | `CR-045` | `library/chromium/disable-web-security.spec.ts` | test utility world in popup w/ --disable-web-security |
 | `CR-046` | `library/chromium/disable-web-security.spec.ts` | test init script w/ --disable-web-security |
 
@@ -2064,6 +2064,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `ER-019` | `library/page-event-crash.spec.ts` | should be able to close context when page crashes |
 | `ER-020` | `library/page-event-crash.spec.ts` | should be able to close page after crash |
 | `ER-021` | `library/page-event-crash.spec.ts` | should reject in-flight worker.evaluate when page crashes |
+| `ER-022` | `page/page-event-pageerror.spec.ts` | should not fire for a caught fetch rejected by a pending navigation |
 
 ### ES — Eval on selector
 
@@ -3720,6 +3721,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `LO-197` | `library/locator-highlight.spec.ts` | Page.hideHighlight clears all locator highlights |
 | `LO-198` | `library/locator-highlight.spec.ts` | highlight should work with a custom selector engine that runs in the main world |
 | `LO-199` | `library/locator-highlight.spec.ts` | highlight should resolve relative to the frame of the locator |
+| `LO-200` | `page/locator-wait-for-function.spec.ts` | should throw when predicate rejects |
 
 ### MC — Multiple clients
 
@@ -3874,6 +3876,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `NA-094` | `library/browsercontext-base-url.spec.ts` | should not construct a new URL when valid URLs are passed |
 | `NA-095` | `library/browsercontext-base-url.spec.ts` | should be able to match a URL relative to its given URL with urlMatcher |
 | `NA-096` | `library/browsercontext-base-url.spec.ts` | should not construct a new URL with baseURL when a glob was used |
+| `NA-097` | `page/page-goto.spec.ts` | should navigate while a new service worker takes over |
 
 ### NE — Network
 
@@ -4119,6 +4122,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `PA-054` | `library/page-close.spec.ts` | should reject response.finished if page closes |
 | `PA-055` | `library/page-close.spec.ts` | should not throw when continuing while page is closing |
 | `PA-056` | `library/page-close.spec.ts` | should not throw when continuing after page is closed |
+| `PA-057` | `page/page-basic.spec.ts` | should prefix the error message with the api name |
 
 ### PC — Playwright client
 
@@ -5256,6 +5260,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `TV-134` | `library/snapshot-renderer.spec.ts` | stripAnsiEscapes should not exhibit polynomial backtracking |
 | `TV-135` | `library/snapshot-renderer.spec.ts` | stripAnsiEscapes handles common ANSI sequences after fix |
 | `TV-136` | `library/snapshot-renderer.spec.ts` | snapshot renderer selects the nearest out-of-order screencast frame |
+| `TV-137` | `library/snapshot-renderer.spec.ts` | snapshot renderer neutralizes declarative shadow roots |
 
 ### TZ — Timezone
 
@@ -5534,6 +5539,7 @@ subsystem, add a row to the Subsystems table. Then update this file:
 | `WO-029` | `library/browsercontext-service-worker-policy.spec.ts` | block › blocks service worker registration |
 | `WO-030` | `library/browsercontext-service-worker-policy.spec.ts` | block › should not throw error on about:blank |
 | `WO-031` | `library/browsercontext-service-worker-policy.spec.ts` | block › should not throw error in opaque sandboxed iframe |
+| `WO-032` | `page/workers.spec.ts` | should run a shared worker after redirected dedicated workers |
 
 ### WS — WebSocket
 

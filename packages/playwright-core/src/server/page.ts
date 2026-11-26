@@ -41,7 +41,6 @@ import * as rawBindingsControllerSource from '../generated/bindingsControllerSou
 import { Overlay } from './overlay';
 import { NonRecoverableDOMError } from './dom';
 import { Screencast } from './screencast';
-import { saveGlobalsSnapshotSource } from './javascript';
 
 import type { Artifact } from './artifact';
 import type { BrowserContextEventMap } from './browserContext';
@@ -224,10 +223,6 @@ export class Page extends SdkObject<PageEventMap> {
   }
 
   async reportAsNew(opener: Page | undefined, error?: Error) {
-    if (this.delegate.noUtilityWorld?.()) {
-      await this._addInitScript(saveGlobalsSnapshotSource);
-      await this.safeNonStallingEvaluateInAllFrames(saveGlobalsSnapshotSource, 'main');
-    }
     if (opener) {
       const openerPageOrError = await opener.waitForInitializedOrError();
       if (openerPageOrError instanceof Page && !openerPageOrError.isClosedOrClosingOrCrashed())
@@ -991,18 +986,16 @@ export class Worker extends SdkObject<WorkerEventMap> {
   static Events = WorkerEvent;
 
   readonly url: string;
-  private _onDisconnect?: () => Promise<void>;
   private _executionContextPromise = new ManualPromise<js.ExecutionContext>();
   private _workerScriptLoaded = false;
   existingExecutionContext: js.ExecutionContext | null = null;
   readonly openScope = new LongStandingScope();
   _closeReason: string | undefined;
 
-  constructor(parent: SdkObject, url: string, onDisconnect?: () => Promise<void>) {
+  constructor(parent: SdkObject, url: string) {
     super(parent, 'worker');
     this.attribution.worker = this;
     this.url = url;
-    this._onDisconnect = onDisconnect;
   }
 
   createExecutionContext(delegate: js.ExecutionContextDelegate) {
@@ -1044,13 +1037,6 @@ export class Worker extends SdkObject<WorkerEventMap> {
   private async _executionContext(progress: Progress): Promise<js.ExecutionContext> {
     // The worker may close before its execution context is ready.
     return await progress.race(this.openScope.race(this._executionContextPromise));
-  }
-
-  async disconnect(progress: Progress, options: { reason?: string } = {}) {
-    if (!this._onDisconnect)
-      throw new Error('Cannot disconnect from this worker');
-    this._closeReason = options.reason;
-    await progress.race(this._onDisconnect());
   }
 }
 
@@ -1121,12 +1107,13 @@ export class InitScript extends DisposableObject {
 }
 
 export async function ariaSnapshotJSONForFrame(progress: Progress, frame: frames.Frame, selector: string | undefined, options: { mode?: 'ai' | 'default', doNotRenderActive?: boolean, depth?: number, boxes?: boolean, strict?: boolean } = {}): Promise<AriaSnapshotJSON> {
+  const documentRootSelector = 'body,frameset,:root:not(html)';
   const snapshot = await frame.retryWithProgressAndTimeouts(progress, [1000, 2000, 4000, 8000], async (progress, continuePolling) => {
     try {
       // Note: the resolved frame might differ from the original |frame|.
       // See https://developer.mozilla.org/en-US/docs/Web/API/Document/body for body/frameset explanation.
       // Non-strict, because pages with nested framesets have multiple "frameset" elements.
-      const resolved = await progress.race(frame.selectors.callOnSelector({ selector: selector || 'body,frameset', strict: options.strict ?? !!selector }, ({ injected, elements }, ariaOptions) => {
+      const resolved = await progress.race(frame.selectors.callOnSelector({ selector: selector || documentRootSelector, strict: options.strict ?? !!selector }, ({ injected, elements }, ariaOptions) => {
         return injected.ariaSnapshotJSON(elements[0], ariaOptions);
       }, {
         mode: options.mode ?? 'default',
@@ -1154,7 +1141,7 @@ export async function ariaSnapshotJSONForFrame(progress: Progress, frame: frames
   const childSnapshotPromises = renderedIframeRefs.map(async ref => {
     const childDepth = options.depth ? options.depth - snapshot.iframeDepths[ref] - 1 : undefined;
     // Non-strict, because child frameset documents have multiple "frameset" elements.
-    const frameRootSelector = `aria-ref=${ref} >> internal:control=enter-frame >> body,frameset`;
+    const frameRootSelector = `aria-ref=${ref} >> internal:control=enter-frame >> ${documentRootSelector}`;
     try {
       return await ariaSnapshotJSONForFrame(progress, snapshot.resolvedFrame, frameRootSelector, { ...options, depth: childDepth, strict: false });
     } catch {

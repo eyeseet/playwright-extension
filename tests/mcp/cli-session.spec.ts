@@ -41,6 +41,39 @@ test('list', async ({ cli, server }) => {
   expect(listOutput).toContain('- default:');
 });
 
+test('list should remove stale registry entries and exit', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-cli/issues/549' },
+}, async ({ cli }, testInfo) => {
+  const registryDir = testInfo.outputPath('registry');
+  await fs.promises.mkdir(registryDir, { recursive: true });
+  for (const guid of ['stale-1', 'stale-2']) {
+    await fs.promises.writeFile(path.join(registryDir, guid), JSON.stringify({
+      playwrightVersion: '0.0.0',
+      title: guid,
+      browser: { guid, browserName: 'chromium', launchOptions: {} },
+      endpoint: testInfo.outputPath(guid + '.sock'),
+    }));
+  }
+
+  const watchLog = testInfo.outputPath('watch.log');
+  const preload = testInfo.outputPath('log-registry-watchers.cjs');
+  await fs.promises.writeFile(preload, `
+    const fs = require('fs');
+    const watch = fs.watch;
+    fs.watch = (...args) => {
+      if (String(args[0]).startsWith(process.env.PWTEST_SERVER_REGISTRY))
+        fs.appendFileSync(${JSON.stringify(watchLog)}, args[0] + '\\n');
+      return watch(...args);
+    };
+  `);
+
+  const { output } = await cli('list', { env: { NODE_OPTIONS: `--require="${preload.replaceAll('\\', '/')}"` } });
+  expect(output).toContain('(no browsers)');
+  expect(await fs.promises.readdir(registryDir)).toEqual([]);
+  // A file watcher on the registry can keep the process alive after the stale entries are removed.
+  expect(fs.existsSync(watchLog)).toBe(false);
+});
+
 test('close', async ({ cli, server }) => {
   await cli('open', server.HELLO_WORLD);
 
@@ -297,6 +330,45 @@ test('list --all lists sessions from all workspaces', async ({ cli, server }, te
   expect(sessionFilesAfterList).not.toContain('session1.session');
   expect(sessionFilesAfterList).toContain('session2.session');
   expect(sessionFilesAfterList).not.toContain('session3.session');
+});
+
+test('list --all and a failed attach list browser profiles available to attach', async ({ cli }, testInfo) => {
+  test.skip(process.platform !== 'linux', 'CHROME_CONFIG_HOME changes the browser folders only on Linux');
+  const configHome = testInfo.outputPath('config');
+  const userDataDir = path.join(configHome, 'google-chrome');
+  const extensionId = 'mmlmfjhmonkocbjadbfplnigmagldckm';
+  await fs.promises.mkdir(path.join(userDataDir, 'Default', 'Extensions', extensionId), { recursive: true });
+  await fs.promises.mkdir(path.join(userDataDir, 'Profile 1'), { recursive: true });
+  await fs.promises.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({
+    profile: { info_cache: { 'Default': { name: 'Work' }, 'Profile 1': { name: 'Profile 2', gaia_name: 'Jane Doe', user_name: 'jane@example.com' } } },
+  }));
+  const env = { CHROME_CONFIG_HOME: configHome, PWTEST_CLI_CHANNEL_SCAN_DISABLED_FOR_TEST: '' };
+  const listing = `### Browsers available to attach
+- chrome:
+  - data-dir: ${userDataDir}
+  - attach (remote debugging): enable at chrome://inspect/#remote-debugging
+
+### Browser profiles available to attach
+- chrome - Work:
+  - profile-dir: ${path.join(userDataDir, 'Default')}
+  - attach (extension): \`playwright-cli attach --cdp="extension://chrome/Default"\`
+
+- chrome - Jane Doe (jane@example.com):
+  - profile-dir: ${path.join(userDataDir, 'Profile 1')}
+  - attach (extension): install at https://chromewebstore.google.com/detail/playwright-extension/${extensionId}`;
+
+  const list = await cli('list', '--all', { env });
+  expect(list.output).toContain(listing);
+
+  const cdp = await cli('attach', '--cdp=remote-debugging://chrome', { env });
+  expect(cdp.exitCode).toBe(1);
+  expect(cdp.error).toContain(`DevToolsActivePort file not found at ${path.join(userDataDir, 'DevToolsActivePort')}`);
+  expect(cdp.error).toContain(listing);
+
+  const extension = await cli('attach', '--cdp=extension://chrome/Profile 1', { env });
+  expect(extension.exitCode).toBe(1);
+  expect(extension.error).toContain(`Playwright Extension not found in "${path.join(userDataDir, 'Profile 1')}"`);
+  expect(extension.error).toContain(listing);
 });
 
 test('newer client with older daemon is compatible', async ({ cli, server }) => {

@@ -22,11 +22,12 @@ import debug from 'debug';
 import { escapeRegExp, escapeWithQuotes } from '@isomorphic/stringUtils';
 import { disposeAll } from '@isomorphic/disposable';
 import { eventsHelper } from '@utils/eventsHelper';
-import { isPathInside, isSystemDirectory, isWritable, resolveSymlinks, sanitizeForFilePath } from '@utils/fileUtils';
+import { isPathInside, isSystemDirectory, isWritableDirectory, resolveSymlinks, sanitizeForFilePath } from '@utils/fileUtils';
 import { playwright } from '../../inprocess';
 
 import { dedent, languageGeneratorId, secretCode } from './codegen';
 import { Tab } from './tab';
+import { throwIfExecutableMissing } from '../utils/browserErrors';
 
 import type { BrowserContextEx } from './browserContextEx';
 import type { CodegenLanguage } from './codegen';
@@ -138,7 +139,6 @@ export class Context {
   private _webmcpToolsSignature = '';
   private _redactUrlParamsRegex: RegExp | undefined;
 
-  private _runningToolName: string | undefined;
   private _pendingUnhandledRejections: unknown[] = [];
   private _unhandledRejectionListeners = new Set<(reason: unknown) => void>();
   private _onUnhandledRejection = (reason: unknown) => {
@@ -365,7 +365,10 @@ export class Context {
     }
     this._video.fileNames.push(fileName);
     const { cursor, ...startParams } = this._video.params;
-    await page.screencast.start({ path: fileName, ...startParams });
+    await page.screencast.start({ path: fileName, ...startParams }).catch(error => {
+      throwIfExecutableMissing(error, 'ffmpeg', this.config.skillMode);
+      throw error;
+    });
     if (cursor) {
       // Show the cursor only, the action title is what `browser_video_show_actions` is for.
       await page.screencast.showActions({ cursor: 'pointer', duration: kCursorDuration, style: { title: 'display: none' } });
@@ -428,14 +431,6 @@ export class Context {
     }
     this._routes = this._routes.filter(r => !toRemove.includes(r));
     return toRemove.length;
-  }
-
-  isRunningTool() {
-    return this._runningToolName !== undefined;
-  }
-
-  setRunningTool(name: string | undefined) {
-    this._runningToolName = name;
   }
 
   private async _setupRequestInterception(context: playwrightTypes.BrowserContext, disposables: Disposable[]) {
@@ -571,17 +566,45 @@ export function outputDir(options: ContextOptions): string {
   if (options.config.outputDir)
     return path.resolve(options.config.outputDir);
   const baseName = options.config.skillMode ? '.playwright-cli' : '.playwright-mcp';
-  if (isSystemDirectory(options.cwd) || !isWritable(options.cwd))
+  if (!isSuitableOutputDirectory(options, options.cwd))
     return path.join(os.tmpdir(), baseName);
   return path.join(options.cwd, baseName);
+}
+
+const outputDirectorySuitability = new WeakMap<ContextOptions, Map<string, boolean>>();
+
+export function isSuitableOutputDirectory(options: ContextOptions, dir: string): boolean {
+  let directories = outputDirectorySuitability.get(options);
+  if (!directories) {
+    directories = new Map();
+    outputDirectorySuitability.set(options, directories);
+  }
+  let suitable = directories.get(dir);
+  if (suitable === undefined) {
+    suitable = !isSystemDirectory(dir) && isWritableDirectory(dir);
+    directories.set(dir, suitable);
+  }
+  return suitable;
 }
 
 export async function outputFile(options: ContextOptions, fileName: string, flags: { origin: 'code' | 'llm' }): Promise<string> {
   const resolvedFile = path.resolve(outputDir(options), fileName);
   await checkFile(options, resolvedFile, flags);
+  await gitIgnoreDefaultOutputDir(options);
   await fs.promises.mkdir(path.dirname(resolvedFile), { recursive: true });
   debug('pw:mcp:file')(resolvedFile);
   return resolvedFile;
+}
+
+async function gitIgnoreDefaultOutputDir(options: ContextOptions) {
+  if (options.config.outputDir)
+    return;
+  const dir = outputDir(options);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' }).catch(error => {
+    if (error.code !== 'EEXIST')
+      throw error;
+  });
 }
 
 async function checkFile(options: ContextOptions, resolvedFilename: string, flags: { origin: 'code' | 'llm' }) {

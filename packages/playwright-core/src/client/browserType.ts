@@ -18,13 +18,13 @@ import path from 'path';
 
 import { assert } from '@isomorphic/assert';
 import { headersObjectToArray } from '@isomorphic/headers';
+import { jsonStringifyForceASCII } from '@utils/ascii';
 import { Browser } from './browser';
 import { BrowserContext, prepareBrowserContextParams } from './browserContext';
 import { ChannelOwner, apiCall } from './channelOwner';
 import { envObjectToArray } from './clientHelper';
 import { connectToBrowser } from './connect';
 import { TimeoutSettings } from './timeoutSettings';
-import { Worker } from './worker';
 
 import type { Playwright } from './playwright';
 import type { ConnectOptions, LaunchOptions, LaunchPersistentContextOptions, LaunchServerOptions } from './types';
@@ -70,12 +70,9 @@ export class BrowserType extends ChannelOwner<channels.BrowserTypeChannel> imple
 
     const logger = options.logger || this._playwright._defaultLaunchOptions?.logger;
     options = { ...this._playwright._defaultLaunchOptions, ...options };
-    const launchOptions: channels.BrowserTypeLaunchParams = {
-      ...options,
-      ignoreDefaultArgs: Array.isArray(options.ignoreDefaultArgs) ? options.ignoreDefaultArgs : undefined,
-      ignoreAllDefaultArgs: !!options.ignoreDefaultArgs && !Array.isArray(options.ignoreDefaultArgs),
-      env: options.env ? envObjectToArray(options.env) : undefined,
-    };
+    if (options.tracesDir)
+      options.tracesDir = path.resolve(options.tracesDir);
+    const launchOptions = toLaunchParams(options);
     const browser = Browser.from((await this._channel.launch(launchOptions, new TimeoutSettings().launchTimeout(options))).browser);
     browser._connectToBrowserType(this, options, logger);
     return browser;
@@ -95,6 +92,8 @@ export class BrowserType extends ChannelOwner<channels.BrowserTypeChannel> imple
       ...this._playwright._defaultLaunchOptions,
       ...options,
     });
+    if (options.tracesDir)
+      options.tracesDir = path.resolve(options.tracesDir);
     await this._instrumentation.runBeforeCreateBrowserContext(options);
 
     const logger = options.logger || this._playwright._defaultLaunchOptions?.logger;
@@ -127,7 +126,14 @@ export class BrowserType extends ChannelOwner<channels.BrowserTypeChannel> imple
   }
 
   async _connect(params: ConnectOptions): Promise<Browser> {
-    const browser = await connectToBrowser(this._playwright, { browserName: this.name(), ...params });
+    const { launchOptions, ...connectParams } = params;
+    if (launchOptions) {
+      connectParams.headers = {
+        'x-playwright-launch-options': jsonStringifyForceASCII(toLaunchParams(launchOptions)),
+        ...connectParams.headers,
+      };
+    }
+    const browser = await connectToBrowser(this._playwright, { browserName: this.name(), ...connectParams });
     browser._connectToBrowserType(this, {}, undefined);
     return browser;
   }
@@ -165,6 +171,7 @@ export class BrowserType extends ChannelOwner<channels.BrowserTypeChannel> imple
       isLocal: params.isLocal,
       noDefaults: params.noDefaults,
       isWebView: (params as any).isWebView,
+      maxPageAttachTime: (params as any).maxPageAttachTime,
       artifactsDir: params.artifactsDir,
     }, new TimeoutSettings().timeout(params));
     return await this._browserFromConnectResult(result);
@@ -173,19 +180,22 @@ export class BrowserType extends ChannelOwner<channels.BrowserTypeChannel> imple
   private async _browserFromConnectResult(result: { browser: channels.BrowserChannel, defaultContext?: channels.BrowserContextChannel }): Promise<Browser> {
     const browser = Browser.from(result.browser);
     browser._connectToBrowserType(this, {}, undefined);
-    if (result.defaultContext)
-      await this._instrumentation.runAfterCreateBrowserContext(BrowserContext.from(result.defaultContext));
+    if (result.defaultContext) {
+      const context = BrowserContext.from(result.defaultContext);
+      await this._playwright.selectors._registerOnContext(context);
+      await this._instrumentation.runAfterCreateBrowserContext(context);
+    }
     return browser;
   }
+}
 
-  async _connectToWorker(endpoint: string, options: { timeout?: number } = {}): Promise<Worker>  {
-    if (this.name() !== 'chromium')
-      throw new Error('Connecting to workers is only supported in Chromium.');
-    const result = await this._channel.connectToWorker({
-      endpoint,
-    }, new TimeoutSettings().timeout(options));
-    return Worker.from(result.worker);
-  }
+function toLaunchParams(options: LaunchOptions): channels.BrowserTypeLaunchParams {
+  return {
+    ...options,
+    ignoreDefaultArgs: Array.isArray(options.ignoreDefaultArgs) ? options.ignoreDefaultArgs : undefined,
+    ignoreAllDefaultArgs: !!options.ignoreDefaultArgs && !Array.isArray(options.ignoreDefaultArgs),
+    env: options.env ? envObjectToArray(options.env) : undefined,
+  };
 }
 
 function isConnectionTransport(value: any): value is api.ConnectOverCDPTransport {

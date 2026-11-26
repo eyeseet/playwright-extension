@@ -25,7 +25,19 @@ import { rafraf } from '../page/pageTest';
 
 test.skip(({ trace }) => trace === 'on');
 
-test('TR-001 should collect trace with resources, but no js', async ({ context, page, server, asset }, testInfo) => {
+test('TR-001 should collect trace with resources, but no js', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44074' }
+}, async ({ context, page, server, asset, mode, toImplInWorkerScope }, testInfo) => {
+  const fetchedBodies: string[] = [];
+  if (mode === 'default') {
+    toImplInWorkerScope(context).on('response', (response: { url(): string, internalBody(): Promise<Buffer> }) => {
+      const internalBody = response.internalBody.bind(response);
+      response.internalBody = async () => {
+        fetchedBodies.push(response.url());
+        return await internalBody();
+      };
+    });
+  }
   await context.tracing.start({ screenshots: true, snapshots: true });
   await page.goto(server.PREFIX + '/frames/frame.html');
   await page.setContent('<button>Click</button>');
@@ -62,6 +74,12 @@ test('TR-001 should collect trace with resources, but no js', async ({ context, 
   const script = events.find(e => e.type === 'resource-snapshot' && e.snapshot.request.url.endsWith('script.js'));
   expect(script).toBeTruthy();
   expect(script.snapshot.response.content._file).toBe(undefined);
+  expect(script.snapshot.response.bodySize).toBeGreaterThan(0);
+  expect(script.snapshot.response.headersSize).toBeGreaterThan(0);
+  if (mode === 'default') {
+    expect(fetchedBodies.some(url => url.endsWith('style.css'))).toBeTruthy();
+    expect(fetchedBodies.some(url => url.endsWith('script.js'))).toBeFalsy();
+  }
 });
 
 test('TR-002 should use the correct title for event driven callbacks', async ({ context, page, server }, testInfo) => {
@@ -301,9 +319,12 @@ test('TR-012 should collect two traces', async ({ context, page, server }, testI
   }
 });
 
-test('TR-013 should respect tracesDir and name', async ({ browserType, server, mode }, testInfo) => {
+test('TR-013 should respect tracesDir and name', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44086' }
+}, async ({ browserType, server, mode }, testInfo) => {
   const tracesDir = testInfo.outputPath('traces');
-  const browser = await browserType.launch({ tracesDir });
+  // A relative path resolves against the current directory.
+  const browser = await browserType.launch({ tracesDir: path.relative(process.cwd(), tracesDir) });
   const context = await browser.newContext();
   const page = await context.newPage();
 
@@ -318,6 +339,25 @@ test('TR-013 should respect tracesDir and name', async ({ browserType, server, m
   await context.tracing.stop({ path: testInfo.outputPath('trace2.zip') });
   expect(fs.existsSync(path.join(tracesDir, 'name2.trace'))).toBe(true);
   expect(fs.existsSync(path.join(tracesDir, 'name2.network'))).toBe(true);
+
+  await context.tracing.start({ name: 'discarded', screenshots: true, snapshots: { dom: true, screen: true, aria: true } });
+  await page.goto(server.PREFIX + '/har.html');
+  // A stylesheet changed through CSSOM is saved as a snapshot resource.
+  await page.evaluate(() => document.styleSheets[0].insertRule('.discarded-rule { color: red }'));
+  await page.click('body');
+  const snapshotResources = () => fs.readdirSync(path.join(tracesDir, 'resources')).filter(file => fs.readFileSync(path.join(tracesDir, 'resources', file), 'utf8').includes('.discarded-rule'));
+  for (const dir of ['screencast', 'screenshots', 'aria'])
+    await expect.poll(() => fs.readdirSync(path.join(tracesDir, dir)).length).toBeGreaterThan(0);
+  await expect.poll(snapshotResources).toHaveLength(1);
+  const networkResources = fs.readdirSync(path.join(tracesDir, 'resources')).filter(file => !snapshotResources().includes(file));
+  await context.tracing.stopChunk();
+  // Discarded files are removed in the background.
+  await expect.poll(() => fs.existsSync(path.join(tracesDir, 'discarded.trace'))).toBe(false);
+  for (const dir of ['screencast', 'screenshots', 'aria'])
+    await expect.poll(() => fs.readdirSync(path.join(tracesDir, dir))).toEqual([]);
+  await expect.poll(() => fs.readdirSync(path.join(tracesDir, 'resources'))).toEqual(networkResources);
+  expect(fs.existsSync(path.join(tracesDir, 'discarded.network'))).toBe(true);
+  await context.tracing.stop();
 
   await browser.close();
 
@@ -406,19 +446,20 @@ test('TR-015 should overwrite existing file', async ({ context, page, server }, 
   await page.goto(server.EMPTY_PAGE);
   await page.setContent('<button>Click</button>');
   await page.click('"Click"');
-  const path = testInfo.outputPath('trace1.zip');
-  await context.tracing.stop({ path });
+  const tracePath = testInfo.outputPath('trace1.zip');
+  await context.tracing.stop({ path: tracePath });
   {
-    const { resources } = await parseTraceRaw(path);
+    const { resources } = await parseTraceRaw(tracePath);
     const names = Array.from(resources.keys());
     expect(names.filter(n => n.endsWith('.html')).length).toBe(1);
   }
 
   await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-  await context.tracing.stop({ path });
+  // A relative path resolves against the current directory.
+  await context.tracing.stop({ path: path.relative(process.cwd(), tracePath) });
 
   {
-    const { resources } = await parseTraceRaw(path);
+    const { resources } = await parseTraceRaw(tracePath);
     const names = Array.from(resources.keys());
     expect(names.filter(n => n.endsWith('.html')).length).toBe(0);
   }

@@ -19,17 +19,22 @@ import net from 'net';
 import os from 'os';
 import path from 'path';
 
-import { isPlaywrightExtensionInstalled } from '../utils/extension';
+import { listBrowserProfiles } from '../utils/extension';
+
+import type { BrowserProfile } from '../utils/extension';
 
 export type ChannelSession = {
   channel: string;
   userDataDir: string;
   endpoint?: string;
-  extensionInstalled: boolean;
+  profiles: BrowserProfile[];
 };
 
-export function isKnownChannel(name: string): boolean {
-  return channelToUserDataDir.has(name);
+// The channel of a channel name such as chrome, or of a URL such as remote-debugging://chrome or extension://chrome/Default.
+export function attachTargetChannel(target: string): string | undefined {
+  if (channelToUserDataDir.has(target))
+    return target;
+  return target.match(/^(?:remote-debugging|extension):\/\/([^/?]+)/)?.[1];
 }
 
 export async function listChannelSessions(): Promise<ChannelSession[]> {
@@ -42,11 +47,11 @@ export async function listChannelSessions(): Promise<ChannelSession[]> {
       continue;
     if (!await pathExists(userDataDir))
       continue;
-    const [endpoint, extensionInstalled] = await Promise.all([
+    const [endpoint, profiles] = await Promise.all([
       readEndpoint(userDataDir),
-      isPlaywrightExtensionInstalled(userDataDir),
+      listBrowserProfiles(userDataDir),
     ]);
-    result.push({ channel, userDataDir, endpoint, extensionInstalled });
+    result.push({ channel, userDataDir, endpoint, profiles });
   }
   return result;
 }

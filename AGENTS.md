@@ -53,7 +53,7 @@ Assume watch is running and code is up to date. Generated files (types, channels
 npm run flint
 ```
 
-Runs all lint checks in parallel: eslint, tsc, doclint, check-deps, generate_channels, generate_types, lint-tests, test-types, lint-packages, code-snippet linting, check-dependency-age (every version in `package-lock.json` must be at least 7 days old).
+Runs all lint checks in parallel: eslint, tsc, doclint, check-deps, generate_channels, generate_types, lint-tests, test-types, lint-packages, code-snippet linting, check-dependency-age (every version in `package-lock.json` must be at least 7 days old, unless only a newer version fixes an advisory of high or critical severity).
 
 **Run `flint` only before you upload a PR, and only after `npm run build`.** Do not run it before each commit. Do not use `tsc --noEmit` or individual lint commands separately.
 
@@ -90,11 +90,8 @@ npm run ctest-mcp snapshot                             # By file name part
 
 ### Test Scope
 
-Keep tests minimal. Be mindful of the number of tests you add.
-
-- **Extend before you add**: before you write a new test, look for an existing test that covers the same feature and the same API. If one exists, add the new edge case or assertion to it. Create a new test only when no existing test is a good fit, or when the new scenario needs a different setup.
-- **New features**: cover the mainstream scenario and the important edge cases only. Do not create matrices of tests for every scenario, option, or aspect.
-- **Regressions**: generalize the provided regression cases into meaningful tests, and stop there. Do not add more tests around them.
+- **Same use case, same test**: if an existing test covers the exact same use case, add the new assertion to that test. In all other cases, write a new test.
+- **One aspect, one test**: never put distant aspects of the same feature into the same test. Write a separate test for each aspect.
 
 ### Regression tests
 
@@ -178,8 +175,9 @@ not literally named above, the answer is still no.
 
 When the root cause is in a browser and the fix does not belong in this repo:
 
-- **Firefox and WebKit** are built in `microsoft/playwright-browsers`. File the bug as an issue there, labeled `browser-firefox` or `browser-webkit`, with the condensed Playwright test as the repro and a link to the Playwright issue.
-- **Chromium** bugs go upstream, to https://crbug.com/new, with a repro that needs no Playwright: a plain page or CDP commands. Only a person can file there.
+- **Firefox** is built in `microsoft/playwright-browsers`. File the bug as an issue there, labeled `browser-firefox`, with the condensed Playwright test as the repro and a link to the Playwright issue.
+- **WebKit** is built in `microsoft/playwright-webkit`. File the bug as an issue there, with the condensed Playwright test as the repro and a link to the Playwright issue.
+- **Chromium** bugs go upstream, to https://crbug.com/new, with a repro that needs no Playwright: a plain page or CDP commands. Only a person can file there. When a newer Chromium broke something that worked before, find the upstream commit first with the [playwright-bisect-chromium](.claude/skills/playwright-bisect-chromium/SKILL.md) skill.
 
 ## Development Guides
 

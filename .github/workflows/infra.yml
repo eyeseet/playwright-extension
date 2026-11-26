@@ -33,6 +33,22 @@ jobs:
     - name: Audit prod NPM dependencies
       run: node utils/check_audit.js
       continue-on-error: true
+  tip-of-tree-gate:
+    name: "tip-of-tree gate"
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        sparse-checkout: packages/playwright-core/browsers.json
+        sparse-checkout-cone-mode: false
+    - name: Fail when browsers.json is at tip-of-tree Chromium
+      run: |
+        REVISIONS=$(jq -r '.browsers[] | select(.name | startswith("chromium")) | .revision' packages/playwright-core/browsers.json)
+        echo "Chromium revisions: "$REVISIONS
+        if grep -q '^tot' <<< "$REVISIONS"; then
+          echo "::error::DO NOT MERGE: browsers.json is at tip-of-tree Chromium, which Playwright does not ship."
+          exit 1
+        fi
   lint-snippets:
     name: "Lint snippets"
     runs-on: ubuntu-latest
@@ -44,10 +60,10 @@ jobs:
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: '3.11'
-    - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+    - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
       with:
         dotnet-version: 8.0.x
-    - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+    - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
       with:
         distribution: 'zulu'
         java-version: '21'

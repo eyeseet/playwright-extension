@@ -67,11 +67,14 @@ const attach = declareCommand({
     name: z.string().optional().describe('Bound browser name to attach to'),
   }),
   options: z.object({
-    cdp: z.string().optional().describe('Connect to an existing browser via CDP endpoint URL.'),
+    cdp: z.string().optional().describe('Connect to an existing browser via CDP endpoint URL, or via a URL from "list --all", such as remote-debugging://chrome or extension://chrome.'),
     endpoint: z.string().optional().describe('Playwright browser server endpoint to attach to.'),
     extension: z.union([z.boolean(), z.string()]).optional().describe('Connect to browser extension, optionally specify browser name (e.g. --extension=chrome)'),
+    ['profile-dir-name']: z.string().optional().describe('With --extension, name of the profile directory to connect to, as shown by "list --all". Defaults to the Default profile directory.'),
     config: z.string().optional().describe('Path to the configuration file, defaults to .playwright/cli.config.json'),
-    session: z.string().optional().describe('Session name (defaults to bound browser name or "default")'),
+    session: z.string().optional().describe('Session name (defaults to bound browser name or "default"). With --extension, it is the title of the tab group.'),
+    ['session-color']: z.string().optional().describe('With --extension, color of the tab group of the session: blue, red, yellow, green, pink, purple, cyan or orange.'),
+    ['no-tab-group']: z.boolean().optional().describe('With --extension, do not put the tabs of the session into a tab group.'),
     ['idle-timeout']: numberArg.optional().describe('Detach after this many milliseconds without a command. Attached browsers are never detached by default.'),
   }),
   toolName: 'browser_snapshot',
@@ -92,6 +95,9 @@ const detach = declareCommand({
   description: 'Detach from an attached browser',
   category: 'core',
   args: z.object({}),
+  options: z.object({
+    ['close-tabs']: z.boolean().optional().describe('With --extension, close the tabs of the session before detaching.'),
+  }),
   toolName: '',
   toolParams: () => ({}),
 });

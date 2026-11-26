@@ -45,12 +45,17 @@ const runCode = defineTabTool({
   },
 
   handle: async (tab, params, response) => {
+    if (!params.code && !params.filename)
+      throw new Error('At least one of "code" or "filename" must be provided.');
+
     let code = params.code;
     if (params.filename) {
       const resolvedPath = await response.resolveClientFilename(params.filename);
       code = await fs.promises.readFile(resolvedPath, 'utf-8');
+      response.addCode(`// Run code from ${params.filename}`);
+    } else {
+      response.addCode(`await (${code})(page);`);
     }
-    response.addCode(`await (${code})(page);`);
     const __end__ = new ManualPromise<void>();
     const context: any = {
       page: tab.page,

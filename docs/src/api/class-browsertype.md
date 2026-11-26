@@ -107,6 +107,14 @@ A Playwright browser websocket endpoint to connect to. You obtain this endpoint 
 
 Additional HTTP headers to be sent with web socket connect request. Optional.
 
+### option: BrowserType.connect.launchOptions
+* since: v1.66
+* langs: js
+- `launchOptions` <[LaunchOptions]>
+
+Options used to launch the browser, as passed to [`method: BrowserType.launch`]. Only applies when the server
+launches a browser for each connection. The server ignores the options that it does not allow.
+
 ### option: BrowserType.connect.slowMo
 * since: v1.10
 - `slowMo` <[float]>
@@ -195,7 +203,11 @@ var page = defaultContext.Pages[0];
 
 A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
 
-Alternatively, a browser channel name such as `chrome` or `msedge` to connect to a browser with remote debugging enabled in its default user data directory. On Linux, Playwright uses `CHROME_USER_DATA_DIR` when set. Otherwise, it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config` to locate that directory.
+Alternatively, a URL that tells which running browser to connect to:
+* `remote-debugging://<channel>` - a browser with remote debugging enabled, for example `remote-debugging://msedge`. The optional `userDataDir` parameter is the user data directory of the browser, when it is not the default one: `remote-debugging://chrome?userDataDir=/path/to/data`. A bare channel name such as `chrome` is the same as `remote-debugging://chrome`.
+* `extension://<channel>/<profile directory>` - the tabs of a browser profile, through the [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm), for example `extension://chrome/Profile 1`. Playwright opens the connect page of the extension in that profile, and the user selects the tabs to share. Without the profile directory, Playwright uses the `Default` profile. The optional parameters are `userDataDir`, the user data directory of the browser when it is not the default one, and `executablePath`, the path to the browser executable when it is not at the standard location: `extension://chromium?executablePath=/path/to/chrome&userDataDir=/path/to/data`. Pass the other options of this connection in [`option: BrowserType.connectOverCDP.headers`].
+
+The values of `userDataDir` and `executablePath` must be URL-encoded, for example with `encodeURIComponent` or `URLSearchParams`. The channel is a browser channel name such as `chrome`, `chrome-beta` or `msedge`. The default user data directory of the channel is where the browser keeps its data. On Linux, Playwright uses `CHROME_USER_DATA_DIR` when set. Otherwise, it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config` to locate that directory.
 
 ### option: BrowserType.connectOverCDP.endpointURL
 * since: v1.14
@@ -208,6 +220,14 @@ Alternatively, a browser channel name such as `chrome` or `msedge` to connect to
 - `headers` <[Object]<[string], [string]>>
 
 Additional HTTP headers to be sent with connect request. Optional.
+
+When [`param: endpointURL`] is an extension URL such as `extension://chrome`, the headers are not sent. They are the options of the connection:
+* `x-playwright-extension-token` - the token of the extension. With the token, the user does not have to approve the connection. Without the token, the user must approve the connection before [`option: BrowserType.connectOverCDP.timeout`] expires, so set it to a value that gives the user enough time.
+* `x-playwright-extension-client-name` - the name of the client that the extension shows to the user.
+* `x-playwright-extension-tab-group` - pass `false` to keep the tabs out of a tab group.
+* `x-playwright-extension-tab-group-title` - the title of the tab group.
+* `x-playwright-extension-tab-group-color` - the color of the tab group: `green`, `blue`, `purple`, `orange`, `pink`, `cyan`, `yellow` or `red`.
+* `x-playwright-extension-background` - pass `true` to keep the tabs from becoming active.
 
 ### option: BrowserType.connectOverCDP.isLocal
 * since: v1.58
@@ -421,7 +441,11 @@ const { chromium } = require('playwright');  // Or 'webkit' or 'firefox'.
 * since: v1.45
 - `host` <[string]>
 
-Host to use for the web socket. It is optional and defaults to `localhost`, accepting connections only from the loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network — be aware this exposes the browser RPC to anything that can reach the listening port.
+Host to use for the web socket. It is optional and defaults to `localhost`, accepting connections only from the loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network.
+
+:::warning
+The Browser Server has no authentication. A client that can reach the listening port and knows the [`option: BrowserType.launchServer.wsPath`] gets full control of the browser and can act as the OS user that started the server. When you pass an explicit host, restrict access to the port with your network configuration, for example a firewall, a private network or an authenticating proxy. Do not rely on the `wsPath` alone.
+:::
 
 ### option: BrowserType.launchServer.port
 * since: v1.8
@@ -440,6 +464,10 @@ unguessable string.
 Any process or web page (including those running in Playwright) with knowledge
 of the `wsPath` can take control of the OS user. For this reason, you should
 use an unguessable token when using this option.
+
+The unguessable path protects a server on the loopback interface from web pages and
+from other local processes. It is not a replacement for network access control: the path
+is a part of the URL and is sent in plain text over `ws://`. See [`option: BrowserType.launchServer.host`].
 :::
 
 ## method: BrowserType.name

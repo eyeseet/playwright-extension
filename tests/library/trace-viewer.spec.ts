@@ -25,7 +25,7 @@ import path from 'path';
 import type http from 'http';
 import { pathToFileURL } from 'url';
 import { expect, playwrightTest } from '../config/browserTest';
-import type { FrameLocator } from '@playwright/test';
+import type { FrameLocator, Locator } from '@playwright/test';
 import { parseTrace, rafraf, roundBox } from '../config/utils';
 
 const test = playwrightTest.extend<TraceViewerFixtures>(traceViewerFixtures);
@@ -433,8 +433,8 @@ test('TV-019 should show params and return value', async ({ showTraceViewer }) =
     /start:[\d\.]+m?s/,
     /duration:[\d]+ms/,
     /expression:"\({↵    a↵  }\) => {↵    console\.log\(\'Info\'\);↵    console\.warn\(\'Warning\'\);↵    console/,
-    'isFunction:true',
     'arg:{"a":"paramA","b":4}',
+    'isFunction:true',
     'value:"return paramA"'
   ]);
 
@@ -443,8 +443,8 @@ test('TV-019 should show params and return value', async ({ showTraceViewer }) =
     /toHaveText/,
     /start:[\d\.]+m?s/,
     /duration:[\d]+ms/,
-    /locator:locator\('button'\)/,
     /expression:"to.have.text"/,
+    /locator:locator\('button'\)/,
     /timeout:10000/,
   ]);
 });
@@ -457,8 +457,8 @@ test('TV-020 should show null as a param', async ({ showTraceViewer, browserName
     /start:[\d\.]+m?s/,
     /duration:[\d]+ms/,
     'expression:"() => 1 + 1"',
-    'isFunction:true',
     'arg:null',
+    'isFunction:true',
     'value:2'
   ]);
 });
@@ -1276,10 +1276,22 @@ test('TV-056 should not treat synthetic shadow root as a shadow root', async ({ 
   await expect(frame.locator('#native .icon')).toHaveCSS('fill', 'rgb(46, 139, 87)');
 });
 
-test('TV-057 should highlight target elements', async ({ page, runAndTrace, browserName }) => {
+async function pointerOffset(frame: FrameLocator, target: Locator) {
+  const targetBox = await target.boundingBox();
+  const pointerBox = await frame.locator('x-pw-pointer').boundingBox();
+  return Math.max(
+      Math.abs(targetBox!.x + targetBox!.width / 2 - pointerBox!.x - pointerBox!.width / 2),
+      Math.abs(targetBox!.y + targetBox!.height / 2 - pointerBox!.y - pointerBox!.height / 2));
+}
+
+test('TV-057 should highlight target elements', { annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44127' } }, async ({ page, runAndTrace, browserName }) => {
   const traceViewer = await runAndTrace(async () => {
     await page.setContent(`
-      <div>t1</div>
+      <style>body { height: 2000px; }</style>
+      <section style="height: 150px; overflow: auto">
+        <div style="margin-top: 60px">t1</div>
+        <div style="height: 300px"></div>
+      </section>
       <div>t2</div>
       <div id=div3>t3</div>
       <div>t4</div>
@@ -1316,14 +1328,13 @@ test('TV-057 should highlight target elements', async ({ page, runAndTrace, brow
 
   const framePageClick = await traceViewer.snapshotFrame('Click');
   await expect.poll(() => highlightedDivs(framePageClick)).toEqual(['t1']);
-  const box1 = await framePageClick.getByText('t1').boundingBox();
-  const box2 = await framePageClick.locator('x-pw-pointer').boundingBox();
-  const x1 = box1!.x + box1!.width / 2;
-  const y1 = box1!.y + box1!.height / 2;
-  const x2 = box2!.x + box2!.width / 2;
-  const y2 = box2!.y + box2!.height / 2;
-  expect(Math.abs(x1 - x2) < 2).toBeTruthy();
-  expect(Math.abs(y1 - y2) < 2).toBeTruthy();
+  for (const scroll of [0, 20, 0]) {
+    await framePageClick.locator('section').evaluate((element, scroll) => {
+      element.scrollTop = scroll;
+      window.scrollTo(0, scroll);
+    }, scroll);
+    await expect.poll(() => pointerOffset(framePageClick, framePageClick.getByText('t1'))).toBeLessThan(2);
+  }
 
   const framePageInnerText = await traceViewer.snapshotFrame('Inner text');
   await expect.poll(() => highlightedDivs(framePageInnerText)).toEqual(['t2']);
@@ -1360,12 +1371,15 @@ test('TV-057 should highlight target elements', async ({ page, runAndTrace, brow
 test('TV-058 should highlight target element in shadow dom', async ({ page, server, runAndTrace }) => {
   const traceViewer = await runAndTrace(async () => {
     await page.goto(server.PREFIX + '/shadow.html');
+    await page.evaluate(() => document.body.style.height = '2000px');
     await page.locator('button').click();
     await expect(page.locator('h1')).toHaveText('Hellow Shadow DOM v1');
   });
 
   const framePageClick = await traceViewer.snapshotFrame('Click');
   await expect(framePageClick.locator('button')).toHaveCSS('background-color', 'rgba(111, 168, 220, 0.498)');
+  await framePageClick.locator('button').evaluate(() => window.scrollTo(0, 20));
+  await expect.poll(() => pointerOffset(framePageClick, framePageClick.locator('button'))).toBeLessThan(2);
 
   const frameExpect = await traceViewer.snapshotFrame('Expect');
   await expect(frameExpect.locator('h1')).toHaveCSS('background-color', 'rgba(111, 168, 220, 0.498)');
@@ -2598,10 +2612,15 @@ test('TV-110 should survive service worker restart', async ({ page, runAndTrace,
 test('TV-111 should not navigate on anchor clicks', async ({ runAndTrace, page, server }) => {
   const url = server.EMPTY_PAGE;
   const traceViewer = await runAndTrace(async () => {
+    // An invalid custom element name must not stop the snapshot script before it guards the links.
     await page.setContent(`
-      <a href="${url}">link1</a>
-      <a href="${url}" target="_blank">link2</a>
-      <a href="${url}" target="_top">link3</a>
+      <body __playwright_custom_elements__="not a valid name">
+        <a href="${url}">link1</a>
+        <a href="${url}" target="_blank">link2</a>
+        <a href="${url}" target="_top">link3</a>
+        <map name="map"><area href="${url}" alt="link4" shape="default"></map>
+        <img usemap="#map" width="100" height="100">
+      </body>
     `);
   });
   const snapshot = await traceViewer.snapshotFrame('Set content');
@@ -2613,6 +2632,8 @@ test('TV-111 should not navigate on anchor clicks', async ({ runAndTrace, page, 
       newPageOpened = true;
     });
     await snapshot.getByRole('link', { name }).click();
+    // A middle click opens a link in a new tab.
+    await snapshot.getByRole('link', { name }).click({ button: 'middle' });
     await traceViewer.page.waitForTimeout(500);
     await expect(traceViewer.page).not.toHaveURL(url, { timeout: 500 });
     expect(frame.url()).not.toBe(url);
@@ -2622,6 +2643,10 @@ test('TV-111 should not navigate on anchor clicks', async ({ runAndTrace, page, 
   await checkLink('link1');
   await checkLink('link2');
   await checkLink('link3');
+
+  await snapshot.locator('area').dispatchEvent('click');
+  await traceViewer.page.waitForTimeout(500);
+  expect(frame.url()).not.toBe(url);
 });
 
 test('TV-112 should respect CSSOM changes', async ({ runAndTrace, page, server }) => {

@@ -4,18 +4,18 @@ This is a public fork of [microsoft/playwright](https://github.com/microsoft/pla
 
 ## Baseline and branches
 
-- Baseline: upstream commit `bac1f9f67e9cff2a8e7ecbac25d56ec3bb1d15c6`, extension **0.5.0**.
+- Baseline: upstream commit `81f985211281bf435a112eaf6532293d3c7523fb`, extension **0.6.0**.
 - main is the maintained branch for this fork. Use the commit pinned by the Windows server release when building for deployment.
 
-The earlier local prototype was based on extension 0.4.0. This fork ports the remaining changes to 0.5.0 TypeScript sources instead of checking in patched JavaScript bundles. Version 0.5.0 already supports background connections; this fork preserves that support and also creates new tabs inactive on background connections.
+The fork follows the upstream 0.6.0 extension and uses its connection, tab ownership and group management code.
 
-## Changes
+## Windows relay compatibility
 
-- Serialize tab-group creation so concurrent debugger attachments create one group.
-- Ungroup a verified Playwright group before closing its final tabs. Preserve existing groups on service-worker startup. See [Chrome tab-group cleanup](maintenance/README.md#chrome-tab-group-cleanup) for the Windows relay and Chrome API limits.
-- Stop repeated temporary debugger detaches from closing a connection merely because a short cooldown has elapsed.
-- Try recovery at most three times. Confirm tab removal before closing an empty connection; when a living tab cannot be recovered, keep its transport and emit a diagnostic event. This avoids endless reconnects but does not guarantee the unrecovered tab is usable.
-- Emit optional `extension.audit` events containing event names and numeric tab/group identifiers. No URLs, tokens, page contents or form values are sent in those events. The stock relay ignores these events; a compatible local relay may store them.
+- A background connection keeps its connect page so the Windows relay can use the private window helper. New tabs open inactive in the same window.
+- The Windows relay can keep its VPS groups when a connection drops. Other background connections release a verified group and keep its tabs open.
+- When the relay closes the last tabs of a verified group, the extension ungroups them first. A renamed or shared group is protected.
+- When Chrome detaches the debugger from a tab that still exists, the extension makes up to three attempts to announce it again. The diagnostic events include only the event name, tab ID and attempt number.
+- Existing scripts can still open `status.html` to reach the client management page.
 
 Local Windows supervisor scripts, tunnel settings, credentials, logs and browser-profile files are **not** part of this repository. The local relay's 24-hour log retention is configured separately. Stock upstream diagnostic logging is otherwise unchanged.
 

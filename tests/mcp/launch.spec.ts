@@ -20,7 +20,7 @@ import { chromium } from 'playwright';
 
 import { test, expect, formatLog } from './fixtures';
 
-test('test reopen browser', async ({ startClient, server }) => {
+test('test reopen browser', { annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1864' } }, async ({ startClient, server }) => {
   const { client, stderr } = await startClient({
     env: {
       DEBUG: 'pw:mcp:test',
@@ -31,10 +31,26 @@ test('test reopen browser', async ({ startClient, server }) => {
     arguments: { url: server.HELLO_WORLD },
   });
 
+  for (const title of ['two', 'three']) {
+    await client.callTool({
+      name: 'browser_tabs',
+      arguments: { action: 'new', url: `data:text/html,<title>${title}</title>${title}` },
+    });
+  }
+  expect(await client.callTool({
+    name: 'browser_tabs',
+    arguments: { action: 'list' },
+  })).toHaveResponse({
+    result: `- 0: [Title](${server.HELLO_WORLD})
+- 1: [two](data:text/html,<title>two</title>two)
+- 2: (current) [three](data:text/html,<title>three</title>three)`,
+  });
+
   expect(await client.callTool({
     name: 'browser_close',
   })).toHaveResponse({
-    code: `await page.close()`,
+    result: 'No open tabs. Navigate to a URL to create one.',
+    code: `await browser.close();`,
   });
 
   expect(await client.callTool({
@@ -42,6 +58,13 @@ test('test reopen browser', async ({ startClient, server }) => {
     arguments: { url: server.HELLO_WORLD },
   })).toHaveResponse({
     snapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
+  });
+
+  expect(await client.callTool({
+    name: 'browser_tabs',
+    arguments: { action: 'list' },
+  })).toHaveResponse({
+    result: `- 0: (current) [Title](${server.HELLO_WORLD})`,
   });
 
   await expect.poll(() => formatLog(stderr()), { timeout: 0 }).toEqual({
@@ -80,7 +103,7 @@ test('surfaces the missing browser executable path so a version mismatch is diag
     arguments: { url: server.HELLO_WORLD },
   });
   // The surfaced path must include the version-specific browser directory
-  // (e.g. chromium-1234) — that's the detail that reveals a version mismatch,
+  // (e.g. chromium-1234 or chromium-tot-1234) — that's the detail that reveals a version mismatch,
   // as opposed to a generic "not installed".
   const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   expect.soft(response).toHaveResponse({
@@ -89,7 +112,7 @@ test('surfaces the missing browser executable path so a version mismatch is diag
   });
   expect.soft(response).toHaveResponse({
     isError: true,
-    error: expect.stringMatching(new RegExp(escapeRegExp(emptyBrowsersPath) + String.raw`[\\/][\w.]+-\d+[\\/]`)),
+    error: expect.stringMatching(new RegExp(escapeRegExp(emptyBrowsersPath) + String.raw`[\\/][\w.]+-(tot-)?\d+[\\/]`)),
   });
 });
 

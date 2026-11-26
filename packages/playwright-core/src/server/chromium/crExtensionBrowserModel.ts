@@ -26,16 +26,12 @@
  * debugger detaches and removes are translated into CDP events on the fly.
  */
 
-import debug from 'debug';
 import ws from 'ws';
+import { debugLogger } from '@utils/debugLogger';
 import { rewriteErrorMessage } from '@utils/stackTrace';
 
-import { logUnhandledError } from './log';
-
 import type { WebSocket } from 'ws';
-import type { DebuggerSession, ExtensionCommands, ExtensionEvent } from './protocol';
-
-const debugLogger = debug('pw:mcp:relay');
+import type { DebuggerSession, ExtensionCommands, ExtensionEvent } from './crExtensionProtocol';
 
 export type CDPMessage = {
   id?: number;
@@ -116,7 +112,7 @@ export class BrowserModel {
   private async _enableAutoAttach(): Promise<void> {
     this._autoAttach = true;
     const tabIds = [...this._knownTabIds];
-    await Promise.all(tabIds.map(tabId => this._attachTab(tabId).catch(logUnhandledError)));
+    await Promise.all(tabIds.map(tabId => this._attachTab(tabId).catch(e => debugLogger.log('extension', e))));
   }
 
   private async _createTarget(url: string | undefined): Promise<{ targetId: string | undefined }> {
@@ -166,7 +162,7 @@ export class BrowserModel {
           break;
         this._knownTabIds.add(tab.id);
         if (this._autoAttach)
-          void this._attachTab(tab.id).catch(logUnhandledError);
+          void this._attachTab(tab.id).catch(e => debugLogger.log('extension', e));
         break;
       }
       case 'chrome.tabs.onRemoved': {
@@ -182,8 +178,10 @@ export class BrowserModel {
       }
       case 'chrome.debugger.onDetach': {
         const [source] = event.params;
-        if (source.tabId !== undefined)
+        if (source.tabId !== undefined) {
+          this._knownTabIds.delete(source.tabId);
           this._detachTab(source.tabId);
+        }
         break;
       }
       case 'extension.initialized':
@@ -294,7 +292,7 @@ class ExtensionConnection {
   }
 
   close(message: string) {
-    debugLogger('closing extension connection:', message);
+    debugLogger.log('extension', `closing extension connection: ${message}`);
     if (this._ws.readyState === ws.OPEN)
       this._ws.close(1000, message);
   }
@@ -305,14 +303,14 @@ class ExtensionConnection {
     try {
       parsedJson = JSON.parse(eventData);
     } catch (e: any) {
-      debugLogger(`<closing ws> Closing websocket due to malformed JSON. eventData=${eventData} e=${e?.message}`);
+      debugLogger.log('extension', `<closing ws> Closing websocket due to malformed JSON. eventData=${eventData} e=${e?.message}`);
       this._ws.close();
       return;
     }
     try {
       this._handleParsedMessage(parsedJson);
     } catch (e: any) {
-      debugLogger(`<closing ws> Closing websocket due to failed onmessage callback. eventData=${eventData} e=${e?.message}`);
+      debugLogger.log('extension', `<closing ws> Closing websocket due to failed onmessage callback. eventData=${eventData} e=${e?.message}`);
       this._ws.close();
     }
   }
@@ -324,7 +322,7 @@ class ExtensionConnection {
     }
     const callback = this._callbacks.get(object.id);
     if (!callback) {
-      debugLogger('← Extension: unexpected response', object);
+      debugLogger.log('extension', `← Extension: unexpected response ${JSON.stringify(object)}`);
       return;
     }
     this._callbacks.delete(object.id);
@@ -336,13 +334,13 @@ class ExtensionConnection {
 
   private _onClose(code: number, reason: Buffer) {
     const message = reason.toString();
-    debugLogger(`<ws closed> code=${code} reason=${message}`);
+    debugLogger.log('extension', `<ws closed> code=${code} reason=${message}`);
     this._dispose();
     this._onclose(message);
   }
 
   private _onError(event: ws.ErrorEvent) {
-    debugLogger(`<ws error> message=${event.message} type=${event.type} target=${event.target}`);
+    debugLogger.log('extension', `<ws error> message=${event.message} type=${event.type} target=${event.target}`);
     this._dispose();
   }
 

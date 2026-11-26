@@ -20,7 +20,7 @@ import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 
-import { isKnownChannel, listChannelSessions } from './channelSessions';
+import { attachTargetChannel, listChannelSessions } from './channelSessions';
 import { JsonOutput, TextOutput } from './output';
 import { clientKey, createClientInfo, explicitSessionName, Registry, resolveSessionName } from './registry';
 import { Session } from './session';
@@ -46,6 +46,9 @@ type AttachOptions = {
   cdp?: string;
   endpoint?: string;
   extension?: boolean | string;
+  'profile-dir-name'?: string;
+  'session-color'?: string;
+  'tab-group'?: boolean;
 };
 
 type OpenOptions = {
@@ -180,13 +183,17 @@ export async function program(options?: { args?: MinimistArgs, embedderVersion?:
         args.extension = true;
       }
 
-      const cdpChannel = typeof args.cdp === 'string' && isKnownChannel(args.cdp) ? args.cdp : undefined;
+      const cdpChannel = typeof args.cdp === 'string' ? attachTargetChannel(args.cdp) : undefined;
       const targetName = attachTarget ?? cdpChannel ?? extensionChannel ?? args.endpoint as string ?? args.cdp as string;
       if (!targetName)
         output.errorAttachNoTarget();
       const attachSessionName = explicitSessionName(args.session as string) ?? attachTarget ?? cdpChannel ?? extensionChannel ?? sessionName;
       args.session = attachSessionName;
-      const { pid } = await startSession(attachSessionName, registry, clientInfo, args, 'attach');
+      const { pid } = await startSession(attachSessionName, registry, clientInfo, args, 'attach').catch(async (e: Error) => {
+        if (!cdpChannel && !args.extension)
+          throw e;
+        return output.errorAttachToChannel(e.message, await listChannelSessions());
+      });
       const newEntry = await registry.loadEntry(clientInfo, attachSessionName);
       const toolText = await runInSessionOrStop(newEntry, clientInfo, { _: ['snapshot'], filename: '<auto>' }, output);
       output.attach(attachSessionName, pid, targetName, toolText);
@@ -202,7 +209,7 @@ export async function program(options?: { args?: MinimistArgs, embedderVersion?:
       const detachEntry = registry.entry(clientInfo, sessionName);
       if (detachEntry && !detachEntry.config.attached)
         output.errorDetachNotAttached(sessionName);
-      const { wasOpen } = detachEntry ? await new Session(detachEntry).stop() : { wasOpen: false };
+      const { wasOpen } = detachEntry ? await new Session(detachEntry).stop({ closeTabs: !!args['close-tabs'] }) : { wasOpen: false };
       output.detach(sessionName, wasOpen);
       return;
     }

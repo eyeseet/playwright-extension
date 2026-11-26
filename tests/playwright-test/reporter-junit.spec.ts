@@ -141,7 +141,7 @@ for (const useIntermediateMergeReport of [false, true] as const) {
       expect(result.exitCode).toBe(0);
     });
 
-    test('should render stdout', async ({ runInlineTest }) => {
+    test('should render stdout', { annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44292' } }, async ({ runInlineTest }) => {
       const result = await runInlineTest({
         'a.test.ts': `
           import colors from 'colors/safe';
@@ -151,6 +151,11 @@ for (const useIntermediateMergeReport of [false, true] as const) {
             console.log('Hello again');
             console.error('My error');
             console.error('\\0'); // null control character
+            const bytes = Buffer.from('\\u{1f916}');
+            for (const stream of [process.stdout, process.stderr]) {
+              stream.write(bytes.subarray(0, 2));
+              stream.write(bytes.subarray(2));
+            }
             test.expect("abc").toBe('abcd');
           });
         `,
@@ -159,10 +164,12 @@ for (const useIntermediateMergeReport of [false, true] as const) {
       const testcase = xml['testsuites']['testsuite'][0]['testcase'][0];
       expect(testcase['system-out'].length).toBe(1);
       expect(testcase['system-out'][0]).toContain('[33mHello world[39m\nHello again');
+      expect(testcase['system-out'][0]).toContain('\u{1f916}');
       expect(testcase['system-out'][0]).not.toContain('u00');
       expect(testcase['system-err'][0]).toContain('My error');
+      expect(testcase['system-err'][0]).toContain('\u{1f916}');
       expect(testcase['system-err'][0]).not.toContain('\u0000'); // null control character
-      expect(testcase['failure'][0]['_']).toContain(`>  9 |             test.expect("abc").toBe('abcd');`);
+      expect(testcase['failure'][0]['_']).toContain(`> 14 |             test.expect("abc").toBe('abcd');`);
       expect(result.exitCode).toBe(1);
     });
 
@@ -345,6 +352,45 @@ for (const useIntermediateMergeReport of [false, true] as const) {
       expect(xml['testsuites']['testsuite'][1]['$']['hostname']).toBe('project2');
       expect(xml['testsuites']['testsuite'][1]['$']['tests']).toBe('1');
       expect(xml['testsuites']['testsuite'][1]['testcase'][0]['$']['name']).toBe('[project2] one');
+    });
+
+    test('should add file attribute relative to fileRoot', {
+      annotation: [
+        { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44099' },
+        { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/44225' },
+      ],
+    }, async ({ runInlineTest }) => {
+      const files = {
+        'packages/foo/playwright.config.ts': `
+          module.exports = {
+            testDir: './src',
+            reporter: [['junit', { addFileAttribute: true, fileRoot: process.env.TEST_FILE_ROOT }]]
+          };
+        `,
+        'packages/foo/src/auth/a.test.js': `
+          import { test, expect } from '@playwright/test';
+          test('one', async ({}) => {
+            expect(1).toBe(1);
+          });
+        `,
+      };
+      const run = async (env: Record<string, string>) => {
+        const result = await runInlineTest(files, { reporter: '', config: './packages/foo/playwright.config.ts' }, env);
+        expect(result.exitCode).toBe(0);
+        return parseXML(result.output)['testsuites']['testsuite'][0]['testcase'][0]['$'];
+      };
+
+      const byDefault = await run({});
+      expect(byDefault['classname']).toBe(path.join('auth', 'a.test.js'));
+      expect(byDefault['file']).toBe('src/auth/a.test.js');
+
+      // The option is relative to the config directory.
+      expect((await run({ TEST_FILE_ROOT: '../..' }))['file']).toBe('packages/foo/src/auth/a.test.js');
+
+      // The environment variable wins and is relative to cwd.
+      expect((await run({ TEST_FILE_ROOT: '../..', PLAYWRIGHT_JUNIT_FILE_ROOT: 'packages' }))['file']).toBe('foo/src/auth/a.test.js');
+
+      expect((await run({ PLAYWRIGHT_JUNIT_ADD_FILE_ATTRIBUTE: '0' }))['file']).toBeUndefined();
     });
 
     test('should render existing attachments, but not missing ones', async ({ runInlineTest }) => {

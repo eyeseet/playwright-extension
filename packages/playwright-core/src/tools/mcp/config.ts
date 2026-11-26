@@ -79,6 +79,8 @@ export type CLIOptions = {
   snapshotMode?: 'full' | 'none';
   storageState?: string;
   tabGroup?: boolean;
+  sessionName?: string;
+  sessionColor?: string;
   background?: boolean;
   testIdAttribute?: string;
   timeoutAction?: number;
@@ -127,7 +129,7 @@ export type FullConfig = MergedConfig & {
 };
 
 export async function resolveConfig(config: Config): Promise<FullConfig> {
-  const merged = mergeConfig(defaultConfig, config);
+  const merged = withExtensionURL(mergeConfig(defaultConfig, config));
   const browser = await validateBrowserConfig(merged.browser);
   return { ...merged, browser };
 }
@@ -141,6 +143,7 @@ export async function resolveCLIConfigForMCP(cliOptions: CLIOptions, env?: NodeJ
   result = mergeConfig(result, await loadConfig(configFile));
   result = mergeConfig(result, resolveConfigPaths(envOverrides, process.cwd()));
   result = mergeConfig(result, resolveConfigPaths(cliOverrides, process.cwd()));
+  result = withExtensionURL(result);
 
   const browser = await validateBrowserConfig(result.browser);
   if (browser.launchOptions.headless === undefined)
@@ -176,6 +179,9 @@ export async function resolveCLIConfigForCLI(daemonProfilesDir: string, sessionN
     headless: options.headed ? false : undefined,
     mobile: options.mobile,
     extension: options.extension,
+    sessionName,
+    sessionColor: options.sessionColor,
+    tabGroup: options.tabGroup,
     userDataDir: options.profile,
     idleTimeout: options.idleTimeout,
     snapshotMode: 'full',
@@ -190,6 +196,7 @@ export async function resolveCLIConfigForCLI(daemonProfilesDir: string, sessionN
   result = mergeConfig(result, await loadConfig(configFile));
   result = mergeConfig(result, resolveConfigPaths(envOverrides, process.cwd()));
   result = mergeConfig(result, resolveConfigPaths(daemonOverrides, process.cwd()));
+  result = withExtensionURL(result);
 
   if (result.browser.isolated === undefined)
     result.browser.isolated = !options.profile && !options.persistent && !result.browser.userDataDir && !result.browser.remoteEndpoint && !result.browser.cdpEndpoint && !result.extension;
@@ -211,11 +218,31 @@ export async function resolveCLIConfigForCLI(daemonProfilesDir: string, sessionN
   return { ...result, browser, configFile, skillMode: true };
 }
 
-export function resolveExtensionOptions(cliOptions: CLIOptions): { channel: string, profileDirName?: string } {
-  const browser = cliOptions.browser ?? envToString(process.env.PLAYWRIGHT_MCP_BROWSER);
-  const { channel } = resolveBrowserParam(browser);
+export function isExtensionURL(endpoint: string | undefined): endpoint is string {
+  return !!endpoint?.startsWith('extension://');
+}
+
+// An extension URL such as extension://chrome as the CDP endpoint turns on the extension mode.
+function withExtensionURL(config: MergedConfig): MergedConfig {
+  return isExtensionURL(config.browser.cdpEndpoint) ? { ...config, extension: true } : config;
+}
+
+// The URL for connectOverCDP: extension://<channel>[/<profile directory>][?userDataDir=<path>&executablePath=<path>].
+// The options give the parts that the URL in the CDP endpoint does not have.
+export function resolveExtensionURL(config: FullConfig, cliOptions: CLIOptions): string {
+  const { channel } = resolveBrowserParam(cliOptions.browser ?? envToString(process.env.PLAYWRIGHT_MCP_BROWSER));
+  const url = new URL(isExtensionURL(config.browser.cdpEndpoint) ? config.browser.cdpEndpoint : `extension://${channel ?? 'chrome'}`);
   const profileDirName = cliOptions.profileDirName ?? envToString(process.env.PLAYWRIGHT_MCP_PROFILE_DIR_NAME);
-  return { channel: channel ?? 'chrome', profileDirName };
+  if (profileDirName && !url.pathname.replace(/^\//, ''))
+    url.pathname = `/${profileDirName}`;
+  const userDataDir = config.browser.userDataDir ?? process.env.PWTEST_EXTENSION_USER_DATA_DIR;
+  if (userDataDir && !url.searchParams.has('userDataDir'))
+    url.searchParams.set('userDataDir', userDataDir);
+  // The merged executablePath already applies cli > env > config file precedence and per-source path resolution.
+  const executablePath = config.browser.launchOptions.executablePath;
+  if (executablePath && !url.searchParams.has('executablePath'))
+    url.searchParams.set('executablePath', executablePath);
+  return url.toString();
 }
 
 async function validateBrowserConfig(browser: MergedConfig['browser']): Promise<FullConfig['browser']> {
@@ -371,6 +398,8 @@ function configFromCLIOptions(cliOptions: CLIOptions): Config & { configFile?: s
     },
     extension: cliOptions.extension,
     tabGroup: cliOptions.tabGroup === false ? false : undefined,
+    sessionName: cliOptions.sessionName,
+    sessionColor: cliOptions.sessionColor,
     background: cliOptions.background,
     server: {
       port: cliOptions.port,
@@ -425,6 +454,8 @@ export function configFromEnv(env?: NodeJS.ProcessEnv): Config & { configFile?: 
   options.allowedOrigins = semicolonSeparatedList(e.PLAYWRIGHT_MCP_ALLOWED_ORIGINS);
   options.allowUnrestrictedFileAccess = envToBoolean(e.PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS);
   options.background = envToBoolean(e.PLAYWRIGHT_MCP_BACKGROUND);
+  options.sessionName = envToString(e.PLAYWRIGHT_MCP_SESSION_NAME);
+  options.sessionColor = envToString(e.PLAYWRIGHT_MCP_SESSION_COLOR);
   options.blockedOrigins = semicolonSeparatedList(e.PLAYWRIGHT_MCP_BLOCKED_ORIGINS);
   options.blockServiceWorkers = envToBoolean(e.PLAYWRIGHT_MCP_BLOCK_SERVICE_WORKERS);
   options.browser = envToString(e.PLAYWRIGHT_MCP_BROWSER);

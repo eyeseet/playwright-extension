@@ -26,7 +26,6 @@ import { registryDirectory } from './registry';
 import { nullProgress, ProgressController } from './progress';
 
 import type { BrowserType } from './browserType';
-import type { CRPage } from './chromium/crPage';
 import type { Page } from './page';
 import type * as types from './types';
 
@@ -92,10 +91,19 @@ export async function launchApp(browserType: BrowserType, options: {
 
 async function installAppIcon(page: Page) {
   const icon = await fs.promises.readFile(libPath('server', 'chromium', 'appIcon.png'));
-  const crPage = page.delegate as CRPage;
-  await crPage._mainFrameSession._client.send('Browser.setDockTile', {
-    image: icon.toString('base64')
-  });
+  await page.setDockTile(icon);
+}
+
+// The settings file is data. Only an object with string values gets into the page.
+function parseSettings(text: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      return {};
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'string')) as Record<string, string>;
+  } catch {
+    return {};
+  }
 }
 
 export async function syncLocalStorageWithSettings(page: Page, appName: string) {
@@ -105,12 +113,15 @@ export async function syncLocalStorageWithSettings(page: Page, appName: string) 
 
   const controller = new ProgressController();
   await controller.run(async progress => {
-    await page.exposeBinding(progress, '_saveSerializedSettings', (_, settings) => {
+    await page.exposeBinding(progress, '_saveSerializedSettings', (source, settings) => {
+      // Only the application saves settings. A frame can have content from a different origin.
+      if (source.frame !== page.mainFrame())
+        return;
       fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-      fs.writeFileSync(settingsFile, settings);
+      fs.writeFileSync(settingsFile, JSON.stringify(parseSettings(String(settings))));
     });
 
-    const settings = await progress.race(fs.promises.readFile(settingsFile, 'utf-8').catch(() => ('{}')));
+    const settings = JSON.stringify(parseSettings(await progress.race(fs.promises.readFile(settingsFile, 'utf-8').catch(() => ('{}')))));
     await page.addInitScript(progress,
         `(${String((settings: any) => {
           // iframes w/ snapshots, etc.

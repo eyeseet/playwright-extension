@@ -51,15 +51,9 @@ BrowserType:
         isLocal: boolean?
         noDefaults: boolean?
         isWebView: boolean?
+        maxPageAttachTime: float?
         artifactsDir: string?
         transport: binary?
       returns:
         browser: Browser
         defaultContext: BrowserContext?
-
-    connectToWorker:
-      title: Connect to worker
-      parameters:
-        endpoint: string
-      returns:
-        worker: Worker

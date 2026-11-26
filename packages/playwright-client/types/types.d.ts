@@ -10669,10 +10669,17 @@ export interface BrowserContext {
   /**
    * @param offline Whether to emulate network being offline for the browser context.
    *
-   * **NOTE** Offline emulation only affects requests that go through the browser's regular network stack, such as page
-   * navigations, `fetch()`, `XMLHttpRequest` and WebSockets. It does not affect WebRTC traffic: established
-   * `RTCPeerConnection`s keep sending and receiving media over UDP. To test WebRTC connection loss, interrupt the
-   * connection outside the browser, for example by stopping the TURN server or using an OS-level firewall.
+   * **NOTE** Offline emulation affects HTTP requests, such as page navigations, `fetch()` and `XMLHttpRequest`.
+   *
+   * WebSocket behavior depends on the browser and whether the connection is already established. Chromium and Firefox
+   * fail new WebSocket connections while offline, but do not close already-open connections. Chromium can defer
+   * incoming messages until the context goes back online, rather than lose them; Firefox can continue delivering
+   * messages while offline. WebKit can allow both new WebSocket connections and traffic on established connections
+   * while offline. Do not rely on offline emulation to test WebSocket message loss or connection closure.
+   *
+   * Offline emulation does not affect WebRTC traffic: established `RTCPeerConnection`s keep sending and receiving media
+   * over UDP. To test WebRTC connection loss, interrupt the connection outside the browser, for example by stopping the
+   * TURN server or using an OS-level firewall.
    *
    */
   setOffline(offline: boolean): Promise<void>;
@@ -11527,13 +11534,40 @@ export interface Browser {
     locale?: string;
 
     /**
-     * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
-     * `false`. When enabled, actions, assertions and queries behave as if
-     * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
-     * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
-     * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
-     * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
-     * automatically filtered. This does not change the accessibility rules of
+     * Whether locators in this context find only [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to `false`.
+     *
+     * When enabled, Playwright applies two rules:
+     * 1. The element that a locator finds must be visible. Actions, assertions and queries behave as if
+     *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called at the end of
+     *    the locator chain.
+     * 1. [locator.first()](https://playwright.dev/docs/api/class-locator#locator-first),
+     *    [locator.last()](https://playwright.dev/docs/api/class-locator#locator-last) and
+     *    [locator.nth(index)](https://playwright.dev/docs/api/class-locator#locator-nth) select among visible
+     *    elements. They behave as if
+     *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called immediately
+     *    before them.
+     *
+     * ```js
+     * // <div hidden>One</div> <div>Two</div> <div>Three</div>
+     * await expect(page.locator('div')).toHaveCount(2);
+     * await expect(page.locator('div').first()).toHaveText('Two');
+     * await expect(page.locator('div').last()).toHaveText('Three');
+     * ```
+     *
+     * An explicit visibility filter always has priority. Playwright does not add its own filter in a position that
+     * already has one. For example, `page.locator('div').filter({ visible: false }).first()` finds the first hidden
+     * element.
+     *
+     * All other parts of the locator chain are not filtered. In `page.locator('section').getByRole('button')`, the button
+     * must be visible, but the section can be hidden by the [visibility](https://playwright.dev/docs/actionability#visible) rules, for example
+     * because it has zero size. The same applies to the inner locators of
+     * [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter),
+     *
+     * [locator.and(locator)](https://playwright.dev/docs/api/class-locator#locator-and) and
+     * [locator.or(locator)](https://playwright.dev/docs/api/class-locator#locator-or): only the second rule applies to
+     * them.
+     *
+     * This option does not change the accessibility rules of
      * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
      * selector-based methods such as
      * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
@@ -14689,7 +14723,7 @@ export interface Locator {
    * - `text` Text content of the element when it is the only child, or the content of a static text fragment.
    * - `children` Child nodes and text fragments.
    * - Boolean and value properties for element state flags: `checked`, `disabled`, `expanded`, `active`, `invalid`,
-   *   `level`, `pressed` and `selected`.
+   *   `level`, `pressed`, `required` and `selected`.
    * - Additional element properties, for example `url` for links and `placeholder` for text boxes.
    * - `ref` Element reference for AI-optimized snapshots.
    * - `cursor` Set to `"pointer"` for clickable elements in AI-optimized snapshots.
@@ -17498,9 +17532,26 @@ export interface BrowserType<Unused = {}> {
    * @param endpointURL A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or
    * `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
    *
-   * Alternatively, a browser channel name such as `chrome` or `msedge` to connect to a browser with remote debugging
-   * enabled in its default user data directory. On Linux, Playwright uses `CHROME_USER_DATA_DIR` when set. Otherwise,
-   * it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config` to locate that directory.
+   * Alternatively, a URL that tells which running browser to connect to:
+   * - `remote-debugging://<channel>` - a browser with remote debugging enabled, for example
+   * `remote-debugging://msedge`. The optional `userDataDir` parameter is the user data directory of the browser,
+   * when it is not the default one: `remote-debugging://chrome?userDataDir=/path/to/data`. A bare channel name such
+   * as `chrome` is the same as `remote-debugging://chrome`.
+   * - `extension://<channel>/<profile directory>` - the tabs of a browser profile, through the
+   * [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm),
+   * for example `extension://chrome/Profile 1`. Playwright opens the connect page of the extension in that profile,
+   * and the user selects the tabs to share. Without the profile directory, Playwright uses the `Default` profile.
+   * The optional parameters are `userDataDir`, the user data directory of the browser when it is not the default
+   * one, and `executablePath`, the path to the browser executable when it is not at the standard location:
+   * `extension://chromium?executablePath=/path/to/chrome&userDataDir=/path/to/data`. Pass the other options of this
+   * connection in
+   * [`headers`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp-option-headers).
+   *
+   * The values of `userDataDir` and `executablePath` must be URL-encoded, for example with `encodeURIComponent` or
+   * `URLSearchParams`. The channel is a browser channel name such as `chrome`, `chrome-beta` or `msedge`. The default
+   * user data directory of the channel is where the browser keeps its data. On Linux, Playwright uses
+   * `CHROME_USER_DATA_DIR` when set. Otherwise, it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config`
+   * to locate that directory.
    * @param options
    */
   connectOverCDP(endpointURL: string, options?: ConnectOverCDPOptions): Promise<Browser>;
@@ -17532,9 +17583,26 @@ export interface BrowserType<Unused = {}> {
    * @param endpointURL A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or
    * `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
    *
-   * Alternatively, a browser channel name such as `chrome` or `msedge` to connect to a browser with remote debugging
-   * enabled in its default user data directory. On Linux, Playwright uses `CHROME_USER_DATA_DIR` when set. Otherwise,
-   * it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config` to locate that directory.
+   * Alternatively, a URL that tells which running browser to connect to:
+   * - `remote-debugging://<channel>` - a browser with remote debugging enabled, for example
+   * `remote-debugging://msedge`. The optional `userDataDir` parameter is the user data directory of the browser,
+   * when it is not the default one: `remote-debugging://chrome?userDataDir=/path/to/data`. A bare channel name such
+   * as `chrome` is the same as `remote-debugging://chrome`.
+   * - `extension://<channel>/<profile directory>` - the tabs of a browser profile, through the
+   * [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm),
+   * for example `extension://chrome/Profile 1`. Playwright opens the connect page of the extension in that profile,
+   * and the user selects the tabs to share. Without the profile directory, Playwright uses the `Default` profile.
+   * The optional parameters are `userDataDir`, the user data directory of the browser when it is not the default
+   * one, and `executablePath`, the path to the browser executable when it is not at the standard location:
+   * `extension://chromium?executablePath=/path/to/chrome&userDataDir=/path/to/data`. Pass the other options of this
+   * connection in
+   * [`headers`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp-option-headers).
+   *
+   * The values of `userDataDir` and `executablePath` must be URL-encoded, for example with `encodeURIComponent` or
+   * `URLSearchParams`. The channel is a browser channel name such as `chrome`, `chrome-beta` or `msedge`. The default
+   * user data directory of the channel is where the browser keeps its data. On Linux, Playwright uses
+   * `CHROME_USER_DATA_DIR` when set. Otherwise, it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config`
+   * to locate that directory.
    * @param options
    */
   connectOverCDP(transport: ConnectOverCDPTransport, options?: ConnectOverCDPOptions): Promise<Browser>;
@@ -17570,9 +17638,26 @@ export interface BrowserType<Unused = {}> {
    * @param endpointURL A CDP websocket endpoint or http url to connect to. For example `http://localhost:9222/` or
    * `ws://127.0.0.1:9222/devtools/browser/387adf4c-243f-4051-a181-46798f4a46f4`.
    *
-   * Alternatively, a browser channel name such as `chrome` or `msedge` to connect to a browser with remote debugging
-   * enabled in its default user data directory. On Linux, Playwright uses `CHROME_USER_DATA_DIR` when set. Otherwise,
-   * it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config` to locate that directory.
+   * Alternatively, a URL that tells which running browser to connect to:
+   * - `remote-debugging://<channel>` - a browser with remote debugging enabled, for example
+   * `remote-debugging://msedge`. The optional `userDataDir` parameter is the user data directory of the browser,
+   * when it is not the default one: `remote-debugging://chrome?userDataDir=/path/to/data`. A bare channel name such
+   * as `chrome` is the same as `remote-debugging://chrome`.
+   * - `extension://<channel>/<profile directory>` - the tabs of a browser profile, through the
+   * [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm),
+   * for example `extension://chrome/Profile 1`. Playwright opens the connect page of the extension in that profile,
+   * and the user selects the tabs to share. Without the profile directory, Playwright uses the `Default` profile.
+   * The optional parameters are `userDataDir`, the user data directory of the browser when it is not the default
+   * one, and `executablePath`, the path to the browser executable when it is not at the standard location:
+   * `extension://chromium?executablePath=/path/to/chrome&userDataDir=/path/to/data`. Pass the other options of this
+   * connection in
+   * [`headers`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp-option-headers).
+   *
+   * The values of `userDataDir` and `executablePath` must be URL-encoded, for example with `encodeURIComponent` or
+   * `URLSearchParams`. The channel is a browser channel name such as `chrome`, `chrome-beta` or `msedge`. The default
+   * user data directory of the channel is where the browser keeps its data. On Linux, Playwright uses
+   * `CHROME_USER_DATA_DIR` when set. Otherwise, it uses `CHROME_CONFIG_HOME`, then `XDG_CONFIG_HOME`, then `~/.config`
+   * to locate that directory.
    * @param options
    */
   connectOverCDP(options: ConnectOverCDPOptions & { wsEndpoint?: string }): Promise<Browser>;
@@ -17969,13 +18054,40 @@ export interface BrowserType<Unused = {}> {
     locale?: string;
 
     /**
-     * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
-     * `false`. When enabled, actions, assertions and queries behave as if
-     * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
-     * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
-     * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
-     * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
-     * automatically filtered. This does not change the accessibility rules of
+     * Whether locators in this context find only [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to `false`.
+     *
+     * When enabled, Playwright applies two rules:
+     * 1. The element that a locator finds must be visible. Actions, assertions and queries behave as if
+     *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called at the end of
+     *    the locator chain.
+     * 1. [locator.first()](https://playwright.dev/docs/api/class-locator#locator-first),
+     *    [locator.last()](https://playwright.dev/docs/api/class-locator#locator-last) and
+     *    [locator.nth(index)](https://playwright.dev/docs/api/class-locator#locator-nth) select among visible
+     *    elements. They behave as if
+     *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called immediately
+     *    before them.
+     *
+     * ```js
+     * // <div hidden>One</div> <div>Two</div> <div>Three</div>
+     * await expect(page.locator('div')).toHaveCount(2);
+     * await expect(page.locator('div').first()).toHaveText('Two');
+     * await expect(page.locator('div').last()).toHaveText('Three');
+     * ```
+     *
+     * An explicit visibility filter always has priority. Playwright does not add its own filter in a position that
+     * already has one. For example, `page.locator('div').filter({ visible: false }).first()` finds the first hidden
+     * element.
+     *
+     * All other parts of the locator chain are not filtered. In `page.locator('section').getByRole('button')`, the button
+     * must be visible, but the section can be hidden by the [visibility](https://playwright.dev/docs/actionability#visible) rules, for example
+     * because it has zero size. The same applies to the inner locators of
+     * [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter),
+     *
+     * [locator.and(locator)](https://playwright.dev/docs/api/class-locator#locator-and) and
+     * [locator.or(locator)](https://playwright.dev/docs/api/class-locator#locator-or): only the second rule applies to
+     * them.
+     *
+     * This option does not change the accessibility rules of
      * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
      * selector-based methods such as
      * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
@@ -18348,8 +18460,14 @@ export interface BrowserType<Unused = {}> {
 
     /**
      * Host to use for the web socket. It is optional and defaults to `localhost`, accepting connections only from the
-     * loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network — be aware
-     * this exposes the browser RPC to anything that can reach the listening port.
+     * loopback interface. Pass an explicit address (e.g. `0.0.0.0`) to accept connections from the network.
+     *
+     * **NOTE** The Browser Server has no authentication. A client that can reach the listening port and knows the
+     * [`wsPath`](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-server-option-ws-path) gets full
+     * control of the browser and can act as the OS user that started the server. When you pass an explicit host, restrict
+     * access to the port with your network configuration, for example a firewall, a private network or an authenticating
+     * proxy. Do not rely on the `wsPath` alone.
+     *
      */
     host?: string;
 
@@ -18413,6 +18531,10 @@ export interface BrowserType<Unused = {}> {
      *
      * **NOTE** Any process or web page (including those running in Playwright) with knowledge of the `wsPath` can take
      * control of the OS user. For this reason, you should use an unguessable token when using this option.
+     *
+     * The unguessable path protects a server on the loopback interface from web pages and from other local processes. It
+     * is not a replacement for network access control: the path is a part of the URL and is sent in plain text over
+     * `ws://`. See [`host`](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-server-option-host).
      *
      */
     wsPath?: string;
@@ -22298,6 +22420,11 @@ export interface FrameLocator {
  * [keyboard.insertText(text)](https://playwright.dev/docs/api/class-keyboard#keyboard-insert-text) to manually fire
  * events as if they were generated from a real keyboard.
  *
+ * **NOTE** Caps Lock state emulation is not supported. Pressing `CapsLock` dispatches keyboard events, but does not
+ * make subsequent lowercase input uppercase. To type uppercase text, pass uppercase characters to
+ * [locator.pressSequentially(text[, options])](https://playwright.dev/docs/api/class-locator#locator-press-sequentially)
+ * or [keyboard.type(text[, options])](https://playwright.dev/docs/api/class-keyboard#keyboard-type).
+ *
  * An example of holding down `Shift` in order to select and delete some text:
  *
  * ```js
@@ -24767,7 +24894,7 @@ export interface Electron {
  *
  *     // Work with WebView's page as usual.
  *     const page = await webview.page();
- *     await page.waitForNavigation({ url: /.*microsoft\/playwright.*\/ });
+ *     await page.waitForURL(/.*microsoft\/playwright.*\/);
  *     console.log(await page.title());
  *   }
  *
@@ -25263,13 +25390,40 @@ export interface AndroidDevice {
     locale?: string;
 
     /**
-     * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
-     * `false`. When enabled, actions, assertions and queries behave as if
-     * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
-     * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
-     * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
-     * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
-     * automatically filtered. This does not change the accessibility rules of
+     * Whether locators in this context find only [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to `false`.
+     *
+     * When enabled, Playwright applies two rules:
+     * 1. The element that a locator finds must be visible. Actions, assertions and queries behave as if
+     *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called at the end of
+     *    the locator chain.
+     * 1. [locator.first()](https://playwright.dev/docs/api/class-locator#locator-first),
+     *    [locator.last()](https://playwright.dev/docs/api/class-locator#locator-last) and
+     *    [locator.nth(index)](https://playwright.dev/docs/api/class-locator#locator-nth) select among visible
+     *    elements. They behave as if
+     *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called immediately
+     *    before them.
+     *
+     * ```js
+     * // <div hidden>One</div> <div>Two</div> <div>Three</div>
+     * await expect(page.locator('div')).toHaveCount(2);
+     * await expect(page.locator('div').first()).toHaveText('Two');
+     * await expect(page.locator('div').last()).toHaveText('Three');
+     * ```
+     *
+     * An explicit visibility filter always has priority. Playwright does not add its own filter in a position that
+     * already has one. For example, `page.locator('div').filter({ visible: false }).first()` finds the first hidden
+     * element.
+     *
+     * All other parts of the locator chain are not filtered. In `page.locator('section').getByRole('button')`, the button
+     * must be visible, but the section can be hidden by the [visibility](https://playwright.dev/docs/actionability#visible) rules, for example
+     * because it has zero size. The same applies to the inner locators of
+     * [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter),
+     *
+     * [locator.and(locator)](https://playwright.dev/docs/api/class-locator#locator-and) and
+     * [locator.or(locator)](https://playwright.dev/docs/api/class-locator#locator-or): only the second rule applies to
+     * them.
+     *
+     * This option does not change the accessibility rules of
      * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
      * selector-based methods such as
      * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).
@@ -26152,6 +26306,20 @@ export interface ConnectOverCDPOptions {
 
   /**
    * Additional HTTP headers to be sent with connect request. Optional.
+   *
+   * When
+   * [`endpointURL`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp-option-endpoint-url)
+   * is an extension URL such as `extension://chrome`, the headers are not sent. They are the options of the connection:
+   * - `x-playwright-extension-token` - the token of the extension. With the token, the user does not have to approve
+   *   the connection. Without the token, the user must approve the connection before
+   *   [`timeout`](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp-option-timeout)
+   *   expires, so set it to a value that gives the user enough time.
+   * - `x-playwright-extension-client-name` - the name of the client that the extension shows to the user.
+   * - `x-playwright-extension-tab-group` - pass `false` to keep the tabs out of a tab group.
+   * - `x-playwright-extension-tab-group-title` - the title of the tab group.
+   * - `x-playwright-extension-tab-group-color` - the color of the tab group: `green`, `blue`, `purple`, `orange`,
+   *   `pink`, `cyan`, `yellow` or `red`.
+   * - `x-playwright-extension-background` - pass `true` to keep the tabs from becoming active.
    */
   headers?: { [key: string]: string; };
 
@@ -26211,6 +26379,14 @@ export interface ConnectOptions {
    * Additional HTTP headers to be sent with web socket connect request. Optional.
    */
   headers?: { [key: string]: string; };
+
+  /**
+   * Options used to launch the browser, as passed to
+   * [browserType.launch([options])](https://playwright.dev/docs/api/class-browsertype#browser-type-launch). Only
+   * applies when the server launches a browser for each connection. The server ignores the options that it does not
+   * allow.
+   */
+  launchOptions?: LaunchOptions;
 
   /**
    * Slows down Playwright operations by the specified amount of milliseconds. Useful so that you can see what is going
@@ -26520,13 +26696,40 @@ export interface BrowserContextOptions {
   locale?: string;
 
   /**
-   * Whether to restrict all locators in this context to [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to
-   * `false`. When enabled, actions, assertions and queries behave as if
-   * [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) were appended to the end of the
-   * locator chain, unless its last part is an explicit visibility filter. For example, `.filter({ visible: false })` at
-   * the end of a locator selects hidden elements even when this option is enabled. Intermediate locators and inner
-   * locators used in [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter) are not
-   * automatically filtered. This does not change the accessibility rules of
+   * Whether locators in this context find only [visible](https://playwright.dev/docs/actionability#visible) elements. Defaults to `false`.
+   *
+   * When enabled, Playwright applies two rules:
+   * 1. The element that a locator finds must be visible. Actions, assertions and queries behave as if
+   *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called at the end of
+   *    the locator chain.
+   * 1. [locator.first()](https://playwright.dev/docs/api/class-locator#locator-first),
+   *    [locator.last()](https://playwright.dev/docs/api/class-locator#locator-last) and
+   *    [locator.nth(index)](https://playwright.dev/docs/api/class-locator#locator-nth) select among visible
+   *    elements. They behave as if
+   *    [locator.visible()](https://playwright.dev/docs/api/class-locator#locator-visible) was called immediately
+   *    before them.
+   *
+   * ```js
+   * // <div hidden>One</div> <div>Two</div> <div>Three</div>
+   * await expect(page.locator('div')).toHaveCount(2);
+   * await expect(page.locator('div').first()).toHaveText('Two');
+   * await expect(page.locator('div').last()).toHaveText('Three');
+   * ```
+   *
+   * An explicit visibility filter always has priority. Playwright does not add its own filter in a position that
+   * already has one. For example, `page.locator('div').filter({ visible: false }).first()` finds the first hidden
+   * element.
+   *
+   * All other parts of the locator chain are not filtered. In `page.locator('section').getByRole('button')`, the button
+   * must be visible, but the section can be hidden by the [visibility](https://playwright.dev/docs/actionability#visible) rules, for example
+   * because it has zero size. The same applies to the inner locators of
+   * [locator.filter([options])](https://playwright.dev/docs/api/class-locator#locator-filter),
+   *
+   * [locator.and(locator)](https://playwright.dev/docs/api/class-locator#locator-and) and
+   * [locator.or(locator)](https://playwright.dev/docs/api/class-locator#locator-or): only the second rule applies to
+   * them.
+   *
+   * This option does not change the accessibility rules of
    * [page.getByRole(role[, options])](https://playwright.dev/docs/api/class-page#page-get-by-role) or the behavior of
    * selector-based methods such as
    * [page.$(selector[, options])](https://playwright.dev/docs/api/class-page#page-query-selector).

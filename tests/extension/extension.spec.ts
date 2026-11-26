@@ -14,727 +14,413 @@
  * limitations under the License.
  */
 
-// eslint-disable-next-line spaced-comment
-/// <reference types="chrome" />
-
 import fs from 'fs/promises';
 import path from 'path';
 
 import WebSocket from 'ws';
+import { chromium } from 'playwright';
 
-import { test, testWithOldExtensionVersion, expect, extensionId, clickAllowAndSelect, connectAndNavigate, readExtensionToken, startWithExtensionFlag } from './extension-fixtures';
+import { test as base, expect } from './harness';
+import { extensionId, clickAllow } from './extension-fixtures';
 import { utils } from '../../packages/playwright-core/lib/coreBundle';
-
-import type { Page } from 'playwright';
 
 const { defaultUserDataDirForChannel } = utils;
 
-test(`navigate with extension`, async ({ browserWithExtension, startExtensionClient, server }) => {
-  const { browserContext, client } = await startExtensionClient();
+const connectPageUrl = expect.stringContaining(`chrome-extension://${extensionId}/connect.html?`);
 
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
+type Profile = {
+  // The profile has the folder of the installed extension.
+  hasExtension?: boolean;
+  // Content of the Preferences file of the profile.
+  preferences?: object;
+};
 
-  const navigateResponse = client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  });
+const test = base.extend<{
+  // Starts a client with a Chrome executable that only records its arguments. Gives the arguments.
+  chromeArgs: (options: { args?: string[], env?: Record<string, string> }) => Promise<string[]>;
+}>({
+  chromeArgs: async ({ startClient, server }, use, testInfo) => {
+    await use(async options => {
+      const executablePath = testInfo.outputPath('fake-chrome.sh');
+      const argsFile = testInfo.outputPath('fake-chrome-args.txt');
+      await fs.writeFile(executablePath, `#!/bin/bash\nprintf '%s\\n' "$@" > "${argsFile}"`, { mode: 0o755 });
+      const { client } = await startClient({
+        args: ['--extension', `--executable-path=${executablePath}`, ...options.args ?? []],
+        env: options.env,
+      });
+      // The call does not complete, because no extension connects.
+      client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } }).catch(() => {});
+      let args: string[] = [];
+      await expect.poll(async () => {
+        args = (await fs.readFile(argsFile, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+        return args;
+      }).not.toEqual([]);
+      return args;
+    });
+  },
+});
 
-  const selectorPage = await confirmationPagePromise;
-  await clickAllowAndSelect(selectorPage!, 'Welcome');
+const testWithOldExtension = test.extend({
+  pathToExtension: async ({ pathToExtension }, use) => {
+    const manifestPath = path.join(pathToExtension, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    manifest.version = '0.0.1';
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+    await use(pathToExtension);
+  },
+});
 
-  expect(await navigateResponse).toHaveResponse({
-    snapshot: expect.stringContaining(`- generic [active] [ref=f1e1]: Hello, world!`),
-  });
+// Creates a user data directory with the given profiles.
+async function createUserDataDir(profiles: Record<string, Profile>): Promise<string> {
+  const userDataDir = test.info().outputPath('user-data-dir');
+  for (const [name, profile] of Object.entries(profiles)) {
+    await fs.mkdir(path.join(userDataDir, name), { recursive: true });
+    if (profile.hasExtension)
+      await fs.mkdir(path.join(userDataDir, name, 'Extensions', extensionId), { recursive: true });
+    if (profile.preferences)
+      await fs.writeFile(path.join(userDataDir, name, 'Preferences'), JSON.stringify(profile.preferences));
+  }
+  return userDataDir;
+}
+
+// Connection through the connect page.
+
+test('client controls the tab that the connect page gives it', async ({ connect, browserWithExtension }) => {
+  const client = await connect('worker');
+  await client.navigate('Alpha');
+
+  expect(await client.snapshot()).toContain('- generic [active] [ref=e1]: Page Alpha');
   expect(await browserWithExtension.chromeStubArgs()).toEqual([[
     `--user-data-dir=${browserWithExtension.userDataDir}`,
     '--profile-directory=Default',
-    expect.stringContaining(`chrome-extension://${extensionId}/connect.html?`),
+    connectPageUrl,
   ]]);
 });
 
-test(`starts the browser when it is not running`, async ({ browserWithExtension, startClient, server }) => {
-  const client = await startWithExtensionFlag(browserWithExtension, startClient, browserWithExtension.chromeStubEnv);
-
-  const navigateResponse = client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
+test('client starts the browser when it is not running', async ({ browserWithExtension, startClient, server }) => {
+  const { client } = await startClient({
+    args: ['--extension'],
+    env: { ...browserWithExtension.chromeStubEnv, PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir },
   });
+  const navigateResponse = client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } });
 
   const browserContext = await browserWithExtension.connect();
-  let selectorPage: Page | undefined;
-  await expect.poll(() => {
-    selectorPage = browserContext.pages().find(page => page.url().startsWith(`chrome-extension://${extensionId}/connect.html`));
-    return selectorPage;
-  }).toBeTruthy();
-  await clickAllowAndSelect(selectorPage!, 'Welcome');
+  const connectPage = () => browserContext.pages().find(page => page.url().startsWith(`chrome-extension://${extensionId}/connect.html`));
+  await expect.poll(connectPage).toBeTruthy();
+  await clickAllow(connectPage()!);
 
-  expect(await navigateResponse).toHaveResponse({
-    snapshot: expect.stringContaining(`Hello, world!`),
-  });
+  expect(await navigateResponse).toHaveResponse({ snapshot: expect.stringContaining('Hello, world!') });
 });
 
-test(`connect.html requests protocol version 2`, async ({ startExtensionClient, server }) => {
-  const { browserContext, client } = await startExtensionClient();
+test('client controls the tab that the user picks', async ({ user, connect }) => {
+  await user.openTab('Alpha');
+  await user.openTab('Beta');
 
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  }).catch(() => {});
-
-  const selectorPage = await confirmationPagePromise;
-  const url = new URL(selectorPage.url());
-  expect(url.searchParams.get('protocolVersion')).toBe('2');
+  const client = await connect('worker', { tabs: ['Alpha'] });
+  expect(await client.tabs()).toEqual(['Alpha']);
+  expect(await client.snapshot()).toContain('- generic [active] [ref=e1]: Page Alpha');
 });
 
-test(`browser_run_code_unsafe can evaluate in a web worker`, async ({ startExtensionClient, server }) => {
-  server.setContent('/worker.js', `
-    self.onmessage = (e) => self.postMessage('echo:' + e.data);
-    self.workerName = 'mcp-worker';
-  `, 'application/javascript');
-  server.setContent('/worker-page', `
-    <title>WorkerPage</title>
-    <body>
-      <script>
-        window.__worker = new Worker('/worker.js');
-      </script>
-    </body>
-  `, 'text/html');
-
-  const { browserContext, client } = await startExtensionClient();
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  const navigateResponse = client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.PREFIX + '/worker-page' },
-  });
-
-  const selectorPage = await confirmationPagePromise;
-  await clickAllowAndSelect(selectorPage, 'Welcome');
-
-  await navigateResponse;
-
-  const runCodeResponse = await client.callTool({
-    name: 'browser_run_code_unsafe',
-    arguments: {
-      code: `async (page) => {
-        const worker = page.workers().length ? page.workers()[0] : await page.waitForEvent('worker');
-        return await worker.evaluate(() => self.workerName);
-      }`,
-    },
-  });
-
-  expect(runCodeResponse).toHaveResponse({
-    result: expect.stringContaining('mcp-worker'),
-  });
-
-  // Open a second page with its own worker via browser_tabs new and verify
-  // that worker eval works in that tab too. This exercises child CDP sessions
-  // (the worker session) on a non-first tab — the relay must route them to
-  // the correct tab rather than always falling back to the first one.
-  server.setContent('/worker2.js', `
-    self.workerName = 'mcp-worker-2';
-  `, 'application/javascript');
-  server.setContent('/worker-page-2', `
-    <title>WorkerPage2</title>
-    <body>
-      <script>
-        window.__worker = new Worker('/worker2.js');
-      </script>
-    </body>
-  `, 'text/html');
-
-  await client.callTool({
-    name: 'browser_tabs',
-    arguments: { action: 'new', url: server.PREFIX + '/worker-page-2' },
-  });
-
-  const runCodeResponse2 = await client.callTool({
-    name: 'browser_run_code_unsafe',
-    arguments: {
-      code: `async (page) => {
-        const worker = page.workers().length ? page.workers()[0] : await page.waitForEvent('worker');
-        return await worker.evaluate(() => self.workerName);
-      }`,
-    },
-  });
-
-  expect(runCodeResponse2).toHaveResponse({
-    result: expect.stringContaining('mcp-worker-2'),
-  });
-});
-
-test(`snapshot of an existing page`, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-
-  const page = await browserContext.newPage();
-  await page.goto(server.HELLO_WORLD);
-
-  // Another empty page.
-  await browserContext.newPage();
-  expect(browserContext.pages()).toHaveLength(3);
-
-  const client = await startWithExtensionFlag(browserWithExtension, startClient);
-  expect(browserContext.pages()).toHaveLength(3);
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  const navigateResponse = client.callTool({
-    name: 'browser_snapshot',
-    arguments: { },
-  });
-
-  const selectorPage = await confirmationPagePromise;
-  expect(browserContext.pages()).toHaveLength(4);
-
-  await clickAllowAndSelect(selectorPage, 'Title');
-
-  expect(await navigateResponse).toHaveResponse({
-    inlineSnapshot: expect.stringContaining(`- generic [active] [ref=e1]: Hello, world!`),
-  });
-});
-
-test(`extension connection uses noDefaults`, {
+test('client does not reset the emulation of the tab that the user picks', {
   annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/42117' },
-}, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-
-  const page = await browserContext.newPage();
-  await page.goto(server.HELLO_WORLD);
+}, async ({ user, connect }) => {
+  const page = await user.openTab('Alpha');
   await page.emulateMedia({ media: 'print' });
-  expect(await page.evaluate(() => matchMedia('print').matches)).toBe(true);
+  const isPrint = () => page.evaluate(() => matchMedia('print').matches);
+  expect(await isPrint()).toBe(true);
 
-  const client = await startWithExtensionFlag(browserWithExtension, startClient);
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  const snapshotResponse = client.callTool({
-    name: 'browser_snapshot',
-    arguments: { },
-  });
-
-  const selectorPage = await confirmationPagePromise;
-  await clickAllowAndSelect(selectorPage, 'Title');
-
-  expect(await snapshotResponse).toHaveResponse({
-    inlineSnapshot: expect.stringContaining(`Hello, world!`),
-  });
-
-  expect(await page.evaluate(() => matchMedia('print').matches)).toBe(true);
+  const client = await connect('worker', { tabs: ['Alpha'] });
+  expect(await client.snapshot()).toContain('Page Alpha');
+  expect(await isPrint()).toBe(true);
 });
 
-testWithOldExtensionVersion(`works with old extension version`, async ({ startExtensionClient, server }) => {
-  // Prelaunch the browser, so that it is properly closed after the test.
-  const { browserContext, client } = await startExtensionClient();
+test('client evaluates in the web worker of each tab', async ({ user, connect, server }) => {
+  server.setContent('/worker-1.js', `self.workerName = 'worker-1';`, 'application/javascript');
+  server.setContent('/worker-2.js', `self.workerName = 'worker-2';`, 'application/javascript');
+  user.definePage('First', `<script>window.worker = new Worker('/worker-1.js');</script>`);
+  user.definePage('Second', `<script>window.worker = new Worker('/worker-2.js');</script>`);
+  const readWorkerName = `async page => {
+    const worker = page.workers()[0] ?? await page.waitForEvent('worker');
+    return await worker.evaluate(() => self.workerName);
+  }`;
 
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
+  const client = await connect('worker');
+  await client.navigate('First');
+  expect(await client.runCode(readWorkerName)).toContain('worker-1');
 
-  const navigateResponse = client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  });
-
-  const selectorPage = await confirmationPagePromise;
-  await clickAllowAndSelect(selectorPage!, 'Welcome');
-
-  expect(await navigateResponse).toHaveResponse({
-    snapshot: expect.stringContaining(`- generic [active] [ref=f1e1]: Hello, world!`),
-  });
+  // The session of the worker must go to the second tab, not to the first one.
+  await client.openTab('Second');
+  expect(await client.runCode(readWorkerName)).toContain('worker-2');
 });
 
-test(`extension needs update`, async ({ startExtensionClient, server }) => {
-  // Prelaunch the browser, so that it is properly closed after the test.
-  const { browserContext, client } = await startExtensionClient({ PWTEST_EXTENSION_PROTOCOL: '1000' });
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  // The call hangs as MCP server never connects to the extension.
-  client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  }).catch(() => {});
-
-  const confirmationPage = await confirmationPagePromise;
-  await expect(confirmationPage.locator('.status-banner')).toContainText(`Playwright client trying to connect requires newer extension version`);
-});
-
-test(`extension rejects outdated client protocol version`, async ({ startExtensionClient, server }) => {
-  const { browserContext, client } = await startExtensionClient({ PWTEST_EXTENSION_PROTOCOL: '1' });
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-
-  // The call hangs as the extension never connects to the relay.
-  client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  }).catch(() => {});
-
-  const confirmationPage = await confirmationPagePromise;
-  await expect(confirmationPage.locator('.status-banner')).toContainText(`The client uses an unsupported protocol version. Update Playwright MCP or CLI to the latest version.`);
-});
-
-test(`custom executablePath skips local extension check`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1590' },
-}, async ({ startClient, server }) => {
-  const executablePath = test.info().outputPath('echo.sh');
-  await fs.writeFile(executablePath, '#!/bin/bash\necho "Custom exec args: $@" > "$(dirname "$0")/output.txt"', { mode: 0o755 });
-
-  // Empty profile would normally fail the extension-installed check; it is skipped when executablePath is set.
-  const { client } = await startClient({
-    args: [`--extension`, `--executable-path=${executablePath}`],
-    env: { PWTEST_EXTENSION_USER_DATA_DIR: test.info().outputPath('empty-profile') },
-  });
-
-  client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  }).catch(() => {});
-  await expect(async () => {
-    const output = await fs.readFile(test.info().outputPath('output.txt'), 'utf8');
-    expect(output).toMatch(new RegExp(`Custom exec args.*chrome-extension://${extensionId}/connect\\.html\\?`));
-  }).toPass();
-});
-
-test(`launches the profile that has the extension`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/41916' },
-}, async ({ startClient, server }, testInfo) => {
-  // The extension lives in a non-default profile only; the launch must target that profile via
-  // `--profile-directory`, otherwise Chrome opens the default profile without the extension and the
-  // connection hangs. A fake executable records the launch arguments, so no real browser is needed.
-  const userDataDir = testInfo.outputPath('multi-profile');
-  await fs.mkdir(path.join(userDataDir, 'Default'), { recursive: true });
-  await fs.mkdir(path.join(userDataDir, 'Profile 1', 'Extensions', extensionId), { recursive: true });
-
-  const executablePath = testInfo.outputPath('echo.sh');
-  await fs.writeFile(executablePath, '#!/bin/bash\necho "Custom exec args: $@" > "$(dirname "$0")/output.txt"', { mode: 0o755 });
-
-  const { client } = await startClient({
-    args: [`--extension`, `--executable-path=${executablePath}`],
-    env: { PWTEST_EXTENSION_USER_DATA_DIR: userDataDir },
-  });
-
-  client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } }).catch(() => {});
-  await expect(async () => {
-    const output = await fs.readFile(testInfo.outputPath('output.txt'), 'utf8');
-    expect(output).toContain(`--profile-directory=Profile 1`);
-  }).toPass();
-});
-
-test(`ignores orphaned preferences entries of an uninstalled extension`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1712' },
-}, async ({ startClient, server }, testInfo) => {
-  // Default has orphaned entries of an uninstalled extension; they must not win over the
-  // actual installation in Profile 1.
-  const userDataDir = testInfo.outputPath('multi-profile');
-  await fs.mkdir(path.join(userDataDir, 'Default'), { recursive: true });
-  await fs.writeFile(path.join(userDataDir, 'Default', 'Preferences'), JSON.stringify({
-    extensions: { settings: { [extensionId]: {} } },
-    protection: { macs: { extensions: { settings: { [extensionId]: 'DEADBEEF' } } } },
-    updateclientdata: { apps: { [extensionId]: { pv: '0.3.0' } } },
-  }));
-  await fs.mkdir(path.join(userDataDir, 'Profile 1'), { recursive: true });
-  await fs.writeFile(path.join(userDataDir, 'Profile 1', 'Preferences'), JSON.stringify({
-    extensions: { settings: { [extensionId]: { path: '/tmp/extension', location: 4 } } },
-  }));
-  // Make the profile with the orphaned entries the preferred, last used one.
-  await fs.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({
-    profile: { last_used: 'Default' },
-  }));
-
-  const executablePath = testInfo.outputPath('echo.sh');
-  await fs.writeFile(executablePath, '#!/bin/bash\necho "Custom exec args: $@" > "$(dirname "$0")/output.txt"', { mode: 0o755 });
-
-  const { client } = await startClient({
-    args: [`--extension`, `--executable-path=${executablePath}`],
-    env: { PWTEST_EXTENSION_USER_DATA_DIR: userDataDir },
-  });
-
-  client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } }).catch(() => {});
-  await expect(async () => {
-    const output = await fs.readFile(testInfo.outputPath('output.txt'), 'utf8');
-    expect(output).toContain(`--profile-directory=Profile 1`);
-  }).toPass();
-});
-
-test(`--profile-dir-name selects the profile`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1732' },
-}, async ({ startClient, server }, testInfo) => {
-  // Both profiles have the extension and Default was used last, so only the option selects Profile 1.
-  const userDataDir = testInfo.outputPath('multi-profile');
-  await fs.mkdir(path.join(userDataDir, 'Default', 'Extensions', extensionId), { recursive: true });
-  await fs.mkdir(path.join(userDataDir, 'Profile 1', 'Extensions', extensionId), { recursive: true });
-  await fs.writeFile(path.join(userDataDir, 'Local State'), JSON.stringify({
-    profile: { last_used: 'Default' },
-  }));
-
-  const executablePath = testInfo.outputPath('echo.sh');
-  await fs.writeFile(executablePath, '#!/bin/bash\necho "Custom exec args: $@" > "$(dirname "$0")/output.txt"', { mode: 0o755 });
-
-  const { client } = await startClient({
-    args: [`--extension`, `--executable-path=${executablePath}`, `--user-data-dir=${userDataDir}`, `--profile-dir-name=Profile 1`],
-  });
-
-  client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } }).catch(() => {});
-  await expect(async () => {
-    const output = await fs.readFile(testInfo.outputPath('output.txt'), 'utf8');
-    expect(output).toContain(`--user-data-dir=${userDataDir} --profile-directory=Profile 1`);
-  }).toPass();
-});
-
-test(`fails when extension is missing in custom userDataDir`, async ({ startClient, server }) => {
-  const userDataDir = test.info().outputPath('empty-profile');
-
-  const { client } = await startClient({
-    args: [`--extension`],
-    env: { PWTEST_EXTENSION_USER_DATA_DIR: userDataDir },
-  });
-
-  expect(await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  })).toHaveResponse({
-    error: expect.stringContaining(`Playwright Extension not found in "${userDataDir}"`),
-    isError: true,
-  });
-});
-
-test(`navigate with extension via --user-data-dir`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/42163' },
-}, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-
-  const { client } = await startClient({
-    args: [`--extension`, `--user-data-dir=${browserWithExtension.userDataDir}`],
-  });
-
-  const response = await connectAndNavigate(browserContext, client, server.HELLO_WORLD);
-  expect(response).toHaveResponse({
-    snapshot: expect.stringContaining(`Hello, world!`),
-  });
-});
-
-test(`navigate with extension via PLAYWRIGHT_MCP_PROFILE_DIR_NAME`, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-
-  const { client } = await startClient({
-    args: [`--extension`],
-    env: {
-      PLAYWRIGHT_MCP_PROFILE_DIR_NAME: 'Default',
-      PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
-    },
-  });
-
-  const response = await connectAndNavigate(browserContext, client, server.HELLO_WORLD);
-  expect(response).toHaveResponse({
-    snapshot: expect.stringContaining(`Hello, world!`),
-  });
-});
-
-test(`--browser <channel> selects channel-specific userDataDir`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1589' },
-}, async ({ startClient, server }) => {
-  const expectedUserDataDir = defaultUserDataDirForChannel('chrome-dev')!;
-
-  const { client } = await startClient({
-    args: [`--extension`, `--browser=chrome-dev`],
-    omitArgs: [`--browser=chromium`],
-  });
-
-  expect(await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  })).toHaveResponse({
-    error: expect.stringContaining(`Playwright Extension not found in "${expectedUserDataDir}"`),
-    isError: true,
-  });
-});
-
-test(`browser_cookie_list and browser_cookie_set work in extension mode`, {
+test('client lists the cookies of the browser', {
   annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/40687' },
-}, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-  const { client } = await startClient({
-    args: [`--extension`],
-    config: { capabilities: ['storage'] },
-    env: {
-      PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
-    },
-  });
+}, async ({ user, connect }) => {
+  const client = await connect('worker', {}, { config: { capabilities: ['storage'] } });
+  await client.navigate('Alpha');
 
-  await connectAndNavigate(browserContext, client, server.HELLO_WORLD);
-
-  // Storage.setCookie / Storage.getCookies are browser-level CDP commands
-  // (no sessionId) and used to be rejected outright by the v2 relay.
-  await client.callTool({
-    name: 'browser_cookie_set',
-    arguments: { name: 'extCookie', value: 'extValue' },
-  });
-  const result = await client.callTool({
-    name: 'browser_cookie_list',
-    arguments: {},
-  });
-
-  expect(result).toHaveResponse({
+  // Storage.getCookies is a command for the browser, not for a tab.
+  await user.browserContext.addCookies([{ name: 'extCookie', value: 'extValue', url: user.urlOf('Alpha') }]);
+  expect(await client.mcp.callTool({ name: 'browser_cookie_list', arguments: {} })).toHaveResponse({
     result: expect.stringContaining('extCookie=extValue'),
   });
 });
 
-test(`bypass connection dialog with token`, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-  const token = await readExtensionToken(browserContext);
+// Connection with the token.
 
-  const clientName = 'token-bypass-client';
-  const { client } = await startClient({
-    clientName,
-    args: [`--extension`],
-    env: {
-      PLAYWRIGHT_MCP_EXTENSION_TOKEN: token,
-      PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
-    },
-  });
+test('connectOverCDP connects through the extension', async ({ user, browserWithExtension }) => {
+  const { PLAYWRIGHT_MCP_EXECUTABLE_PATH: executablePath, ...stubEnv } = browserWithExtension.chromeStubEnv;
+  // The relay runs in this process, and the Chrome stub gets its environment.
+  Object.assign(process.env, stubEnv);
+  try {
+    const browser = await chromium.connectOverCDP(`extension://chromium?${new URLSearchParams({ userDataDir: browserWithExtension.userDataDir, executablePath })}`, {
+      headers: {
+        'x-playwright-extension-token': await user.token(),
+        'x-playwright-extension-client-name': 'library',
+        'x-playwright-extension-tab-group-title': 'Library tabs',
+        'x-playwright-extension-tab-group-color': 'purple',
+      },
+    });
+    const [page] = browser.contexts()[0].pages();
+    await page.goto(user.urlOf('Alpha'));
+    expect(await page.textContent('body')).toBe('Page Alpha');
+    expect(await user.connectedClients()).toEqual(['library']);
+    expect(await user.groups()).toEqual([{ title: 'Library tabs', color: 'purple', tabs: ['Alpha'] }]);
 
-  const navigateResponse = await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  });
-
-  expect(await navigateResponse).toHaveResponse({
-    snapshot: expect.stringContaining(`- generic [active] [ref=f1e1]: Hello, world!`),
-  });
-
-  const page = await browserContext.newPage();
-  await page.goto(`chrome-extension://${extensionId}/status.html`);
-  await expect(page.locator('.client-info')).toContainText(`Connected to "${clientName}"`);
+    await browser.close();
+    await expect.poll(user.connectedClients).toEqual([]);
+  } finally {
+    for (const name of Object.keys(stubEnv))
+      delete process.env[name];
+  }
 });
 
-test(`--background does not activate controlled tabs`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/42973' },
-}, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-  const token = await readExtensionToken(browserContext);
-  const userPage = await browserContext.newPage();
-  await userPage.goto(server.EMPTY_PAGE);
-  await userPage.bringToFront();
-  const [sw] = browserContext.serviceWorkers();
-  const activeTabUrls = () => sw.evaluate(async () => {
-    const chrome = (globalThis as any).chrome;
-    const tabs = await chrome.tabs.query({ active: true });
-    return tabs.map((tab: any) => tab.url);
+test('client with the token skips the connect page', async ({ user, connectWithToken }) => {
+  const client = await connectWithToken('token-client');
+  await client.navigate('Alpha');
+
+  expect(await client.snapshot()).toContain('- generic [active] [ref=e1]: Page Alpha');
+  expect(await user.connectedClients()).toEqual(['token-client']);
+});
+
+test('token is not in the url of the connect page', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1791' },
+}, async ({ user, connectWithToken }) => {
+  const client = await connectWithToken('worker');
+
+  // The connect page becomes the blank tab of the client.
+  const response = await client.mcp.callTool({ name: 'browser_tabs', arguments: { action: 'list' } });
+  expect(response).toHaveResponse({ result: expect.stringContaining('about:blank') });
+  expect(JSON.stringify(response)).not.toContain(await user.token());
+});
+
+test('client reports an error when the extension refuses the token', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1732' },
+}, async ({ user, start }) => {
+  const client = await start('worker', {
+    env: { PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'wrong-token', PWTEST_EXTENSION_CONNECT_TIMEOUT: '500' },
   });
 
-  const { client } = await startClient({
-    args: [`--extension`, `--background`],
-    env: {
-      PLAYWRIGHT_MCP_EXTENSION_TOKEN: token,
-      PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
-    },
+  const connectPage = user.waitForConnectPage();
+  expect(await client.mcp.callTool({ name: 'browser_tabs', arguments: { action: 'list' } })).toHaveResponse({
+    error: expect.stringContaining(`Playwright extension did not connect within 0.5s after opening the connect page. Make sure the extension is installed in the Chrome profile "Default" and the extension token is correct.`),
+    isError: true,
   });
-  expect(await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  })).toHaveResponse({
-    snapshot: expect.stringContaining(`Hello, world!`),
-  });
-  expect(await activeTabUrls()).toEqual([server.EMPTY_PAGE]);
+  await expect((await connectPage).locator('.status-banner')).toContainText('Invalid token provided.');
+
+  // The client does not keep the failed attempt. The next tool call opens a new connect page.
+  await Promise.all([user.waitForConnectPage(), client.tabs()]);
+});
+
+test('client reconnects after the user disconnects it', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/41874' },
+}, async ({ user, connectWithToken }) => {
+  const client = await connectWithToken('worker', { env: { DEBUG: 'pw:mcp:backend' } });
+  await client.navigate('Alpha');
+
+  // The disconnect closes the relay connection, as the stop of an idle service worker does.
+  await user.disconnect('worker');
+  await expect.poll(client.stderr).toContain('browser disconnected');
+
+  // The next tool call connects again. The token skips the connect page.
+  await client.navigate('Beta');
+  expect(await client.snapshot()).toContain('Page Beta');
+});
+
+test('--background does not show the tabs of the client to the user', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/42973' },
+}, async ({ user, connectWithToken, browserWithExtension }) => {
+  const page = await user.openTab('Alpha');
+  await page.bringToFront();
+
+  const client = await connectWithToken('worker', { args: ['--background'] });
+  await client.navigate('Beta');
+  expect(await client.snapshot()).toContain('Page Beta');
+  expect(await user.activeTabs()).toEqual(['Alpha']);
   expect(await browserWithExtension.chromeStubArgs()).toEqual([[
     `--user-data-dir=${browserWithExtension.userDataDir}`,
     '--profile-directory=Default',
     '--open-in-background',
-    expect.stringContaining(`chrome-extension://${extensionId}/connect.html?`),
+    connectPageUrl,
   ]]);
 
-  await client.callTool({
-    name: 'browser_tabs',
-    arguments: { action: 'new', url: server.PREFIX + '/title.html' },
-  });
-  expect(await client.callTool({
-    name: 'browser_tabs',
-    arguments: { action: 'select', index: 0 },
-  })).toHaveResponse({
-    result: expect.stringContaining(`- 0: (current)`),
-  });
-  expect(await activeTabUrls()).toEqual([server.EMPTY_PAGE]);
+  await client.openTab('Gamma');
+  await client.selectTab('Beta');
+  expect(await client.currentTab()).toBe('Beta');
+  expect(await user.activeTabs()).toEqual(['Alpha']);
 });
 
-test(`does not expose the token in the connect page url`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1791' },
-}, async ({ browserWithExtension, startClient }) => {
-  const browserContext = await browserWithExtension.launch();
-  const token = await readExtensionToken(browserContext);
+// The manage page.
 
-  const { client } = await startClient({
-    args: [`--extension`],
-    env: {
-      PLAYWRIGHT_MCP_EXTENSION_TOKEN: token,
-      PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
+test('extension icon opens the manage page with the clients and their tabs', async ({ user, connectWithToken }) => {
+  const client = await connectWithToken('worker');
+  await client.navigate('Alpha');
+
+  await user.clickExtensionIcon();
+  const managePages = () => user.browserContext.pages().filter(page => page.url().endsWith('/manage.html'));
+  await expect.poll(() => managePages().length).toBe(1);
+  const [managePage] = managePages();
+  const connection = managePage.locator('.connection');
+  await expect(connection.locator('.card-title')).toHaveText('worker');
+  await expect(connection.locator('.tab-title')).toHaveText(['Alpha']);
+
+  // The page shows a new tab of the client without a reload.
+  await client.openTab('Beta');
+  await expect(connection.locator('.tab-title')).toHaveText(['Alpha', 'Beta']);
+
+  // The second click shows the same page again.
+  await user.clickExtensionIcon();
+  await expect.poll(user.activeTabs).toEqual(['Playwright Extension']);
+  expect(managePages()).toHaveLength(1);
+
+  await connection.getByRole('button', { name: 'Disconnect' }).click();
+  await expect(connection).toHaveCount(0);
+  await expect(managePage.locator('.status-banner')).toContainText('No clients are connected.');
+});
+
+test('user rotates the token on the manage page', async ({ user, connectWithToken }) => {
+  const oldToken = await user.token();
+  await user.rotateToken();
+  expect(await user.token()).not.toBe(oldToken);
+
+  const client = await connectWithToken('worker');
+  await client.navigate('Alpha');
+  expect(await client.snapshot()).toContain('Page Alpha');
+});
+
+// Protocol versions.
+
+test('connect page asks for protocol version 2', async ({ openConnectPage }) => {
+  const { connectPage } = await openConnectPage('worker');
+  expect(new URL(connectPage.url()).searchParams.get('protocolVersion')).toBe('2');
+});
+
+testWithOldExtension('client works with an old version of the extension', async ({ connect }) => {
+  const client = await connect('worker');
+  await client.navigate('Alpha');
+  expect(await client.snapshot()).toContain('- generic [active] [ref=e1]: Page Alpha');
+});
+
+test('connect page asks to update the extension for a newer client', async ({ openConnectPage }) => {
+  const { connectPage } = await openConnectPage('worker', { env: { PWTEST_EXTENSION_PROTOCOL: '1000' } });
+  await expect(connectPage.locator('.status-banner')).toContainText('Playwright client trying to connect requires newer extension version');
+});
+
+test('connect page asks to update the client for an older client', async ({ openConnectPage }) => {
+  const { connectPage } = await openConnectPage('worker', { env: { PWTEST_EXTENSION_PROTOCOL: '1' } });
+  await expect(connectPage.locator('.status-banner')).toContainText('The client uses an unsupported protocol version. Update Playwright MCP or CLI to the latest version.');
+});
+
+// The browser profile that the client starts.
+
+test('--user-data-dir gives the profile of the extension', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/42163' },
+}, async ({ connect, browserWithExtension }) => {
+  const client = await connect('worker', {}, { args: [`--user-data-dir=${browserWithExtension.userDataDir}`] });
+  await client.navigate('Alpha');
+  expect(await client.snapshot()).toContain('Page Alpha');
+});
+
+test('PLAYWRIGHT_MCP_PROFILE_DIR_NAME gives the profile of the extension', async ({ connect }) => {
+  const client = await connect('worker', {}, { env: { PLAYWRIGHT_MCP_PROFILE_DIR_NAME: 'Default' } });
+  await client.navigate('Alpha');
+  expect(await client.snapshot()).toContain('Page Alpha');
+});
+
+test('--profile-dir-name selects one of the profiles that have the extension', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1732' },
+}, async ({ chromeArgs }) => {
+  const userDataDir = await createUserDataDir({
+    'Default': { hasExtension: true },
+    'Profile 1': { hasExtension: true },
+  });
+
+  const args = await chromeArgs({ args: [`--user-data-dir=${userDataDir}`, '--profile-dir-name=Profile 1'] });
+  expect(args).toEqual([`--user-data-dir=${userDataDir}`, '--profile-directory=Profile 1', connectPageUrl]);
+});
+
+test('--executable-path skips the check that the profile has the extension', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1590' },
+}, async ({ chromeArgs }) => {
+  const args = await chromeArgs({ env: { PWTEST_EXTENSION_USER_DATA_DIR: test.info().outputPath('empty-profile') } });
+  expect(args).toContainEqual(connectPageUrl);
+});
+
+test('client reports an error when the profile does not have the extension', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1712' },
+}, async ({ startClient, server }) => {
+  const userDataDir = await createUserDataDir({
+    'Default': {
+      preferences: {
+        extensions: { settings: { [extensionId]: {} } },
+        protection: { macs: { extensions: { settings: { [extensionId]: 'DEADBEEF' } } } },
+        updateclientdata: { apps: { [extensionId]: { pv: '0.3.0' } } },
+      },
     },
   });
-
-  // With the token bypass, the connect page itself becomes the connected tab.
-  const response = await client.callTool({
-    name: 'browser_tabs',
-    arguments: { action: 'list' },
+  const { client } = await startClient({
+    args: ['--extension'],
+    env: { PWTEST_EXTENSION_USER_DATA_DIR: userDataDir },
   });
-  expect(response).toHaveResponse({
-    result: expect.stringContaining(`chrome-extension://${extensionId}/connect.html?`),
-  });
-  expect(JSON.stringify(response)).not.toContain(token);
-});
 
-test(`times out when the extension rejects the token`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1732' },
-}, async ({ startExtensionClient, server }) => {
-  const { browserContext, client } = await startExtensionClient({
-    PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'wrong-token',
-    PWTEST_EXTENSION_CONNECT_TIMEOUT: '500',
-  });
-  const waitForConnectPage = () => browserContext.waitForEvent('page', page => page.url().startsWith(`chrome-extension://${extensionId}/connect.html`));
-
-  const connectPagePromise = waitForConnectPage();
-  expect(await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  })).toHaveResponse({
-    error: expect.stringContaining(`Playwright extension did not connect within 0.5s after opening the connect page. Make sure the extension is installed in the Chrome profile "Default" and PLAYWRIGHT_MCP_EXTENSION_TOKEN matches its token.`),
+  expect(await client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } })).toHaveResponse({
+    error: expect.stringContaining(`Playwright Extension not found in "${path.join(userDataDir, 'Default')}"`),
     isError: true,
   });
-  await expect((await connectPagePromise).locator('.status-banner')).toContainText('Invalid token provided.');
-
-  // The failed attempt is not cached, the next call opens a new connect page.
-  const retryConnectPagePromise = waitForConnectPage();
-  const retryPromise = client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  });
-  await retryConnectPagePromise;
-  await retryPromise;
 });
 
-test(`reconnects after the extension connection drops`, {
-  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/41874' },
-}, async ({ browserWithExtension, startClient, server }) => {
-  const browserContext = await browserWithExtension.launch();
-  const token = await readExtensionToken(browserContext);
-
-  const { client, stderr } = await startClient({
-    args: [`--extension`],
-    env: {
-      DEBUG: 'pw:mcp:backend',
-      PLAYWRIGHT_MCP_EXTENSION_TOKEN: token,
-      PWTEST_EXTENSION_USER_DATA_DIR: browserWithExtension.userDataDir,
-    },
+test('--browser selects the user data directory of that channel', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1589' },
+}, async ({ startClient, server }) => {
+  const { client } = await startClient({
+    args: ['--extension', '--browser=chrome-dev'],
+    omitArgs: ['--browser=chromium'],
   });
 
-  expect(await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  })).toHaveResponse({
-    snapshot: expect.stringContaining(`Hello, world!`),
-  });
-
-  // Closing the last controlled tab drops the relay WebSocket, like the MV3
-  // service worker idle timeout would.
-  await browserContext.pages().find(page => page.url() === server.HELLO_WORLD)!.close();
-
-  // Wait for the MCP server to observe the disconnect.
-  await expect.poll(() => stderr()).toContain('browser disconnected');
-
-  // The next tool call reconnects transparently; the token bypasses the dialog.
-  expect(await client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  })).toHaveResponse({
-    snapshot: expect.stringContaining(`Hello, world!`),
+  expect(await client.callTool({ name: 'browser_navigate', arguments: { url: server.HELLO_WORLD } })).toHaveResponse({
+    error: expect.stringContaining(`Playwright Extension not found in "${path.join(defaultUserDataDirForChannel('chrome-dev')!, 'Default')}"`),
+    isError: true,
   });
 });
 
-test('closing the last relay tab ungroups it first and preserves unrelated groups', async ({ browserWithExtension, server }) => {
-  const browserContext = await browserWithExtension.launch();
-  const extensionOrigin = `chrome-extension://${extensionId}`;
-  const observer = await browserContext.newPage();
-  await observer.goto(extensionOrigin + '/status.html');
-  const ordinary = await observer.evaluate(async () => {
-    const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
-    const id = await chrome.tabs.group({ createProperties: { windowId: tab.windowId }, tabIds: [tab.id!] });
-    await chrome.tabGroups.update(id, { title: 'Playwright · User-created group' });
-    return id;
-  });
-  const connectPage = await browserContext.newPage();
-  const url = new URL(extensionOrigin + '/connect.html');
-  url.searchParams.set('mcpRelayUrl', `ws://127.0.0.1:${server.PORT}/ws`);
-  url.searchParams.set('protocolVersion', '2');
-  url.searchParams.set('client', JSON.stringify({ name: 'Cleanup test' }));
-  const connecting = server.waitForWebSocket();
-  await connectPage.goto(url.href);
-  const tabId = await connectPage.evaluate(async () => (await chrome.tabs.getCurrent())!.id!);
-  await clickAllowAndSelect(connectPage, 'Welcome');
-  const socket = await connecting;
-  await expect(connectPage.locator('.status-banner')).toContainText('connected.');
-  socket.send(JSON.stringify({ id: 1, method: 'chrome.debugger.attach', params: [{ tabId }, '1.3'] }));
-  await expect.poll(() => observer.evaluate(async id => (await chrome.tabs.get(id)).groupId, tabId)).toBeGreaterThanOrEqual(0);
-  await observer.evaluate(id => {
-    const events: string[] = [];
-    Object.assign(globalThis, { closeEvents: events });
-    chrome.tabs.onUpdated.addListener((tabId, change) => {
-      if (tabId === id && change.groupId === -1)
-        events.push('ungrouped');
-    });
-    chrome.tabs.onRemoved.addListener(tabId => {
-      if (tabId === id)
-        events.push('closed');
-    });
-  }, tabId);
+// The relay.
 
-  socket.send(JSON.stringify({ id: 2, method: 'chrome.tabs.remove', params: [tabId] }));
-  await expect.poll(() => observer.evaluate(() => (globalThis as typeof globalThis & { closeEvents: string[] }).closeEvents)).toEqual(['ungrouped', 'closed']);
-  expect(await observer.evaluate(async id => (await chrome.tabGroups.get(id)).title, ordinary)).toBe('Playwright · User-created group');
-});
-
-test(`relay rejects websocket upgrades with forged host or origin`, {
+test('relay refuses a WebSocket connection with a wrong host or origin', {
   annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright-mcp/issues/1694' },
-}, async ({ startExtensionClient, server }) => {
-  const { browserContext, client } = await startExtensionClient();
-
-  const confirmationPagePromise = browserContext.waitForEvent('page', page => {
-    return page.url().startsWith(`chrome-extension://${extensionId}/connect.html`);
-  });
-  const navigateResponse = client.callTool({
-    name: 'browser_navigate',
-    arguments: { url: server.HELLO_WORLD },
-  });
-  const connectPage = await confirmationPagePromise;
+}, async ({ user, openConnectPage }) => {
+  const { connectPage, connected } = await openConnectPage('worker');
   const relayUrl = new URL(connectPage.url()).searchParams.get('mcpRelayUrl')!;
-  expect(relayUrl).toBeTruthy();
-  await clickAllowAndSelect(connectPage, 'Welcome');
-  await navigateResponse;
+  await user.allow(connectPage);
+  await connected;
 
   expect(await wsUpgradeResult(relayUrl, { host: 'evil.com' })).toBe(403);
   expect(await wsUpgradeResult(relayUrl, { host: 'evil.com:80' })).toBe(403);
   expect(await wsUpgradeResult(relayUrl, { origin: 'http://evil.com' })).toBe(403);
   expect(await wsUpgradeResult(relayUrl, { origin: 'https://evil.com' })).toBe(403);
-
-  // Control: default headers pass the upgrade validation.
   expect(await wsUpgradeResult(relayUrl)).toBe('connected');
 });
 
+// Gives the HTTP status of a refused WebSocket connection, or 'connected'.
 function wsUpgradeResult(url: string, headers?: Record<string, string>): Promise<number | 'connected'> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
